@@ -1,0 +1,150 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id        String   @id @default(cuid())
+  name      String   @default("創作者")
+  username  String   @unique
+  createdAt DateTime @default(now())
+
+  publicPage         Boolean @default(true)
+  chosenPlan         String  @default("入門")
+  donationMinAmount  Int     @default(30)
+  donationSound      String  @default("預設音效")
+  donationTotal      Int     @default(0)
+  donationDonors     Int     @default(0)
+  totalViews         Int     @default(0)
+  followers          Int     @default(0)
+  totalMessages      Int     @default(0)
+  demoMode           Boolean @default(false)
+  email              String  @default("")
+  zixiWallet         String  @default("")
+  avatar             String  @default("")
+
+  chatSettings    ChatSettings?
+  subtitleConfig  SubtitleConfig?
+  donationGoals   DonationGoal[]
+  obsSources      OBSSource[]
+  streamSessions  StreamSession[]
+  connections     PlatformConnection[]
+  sessions        Session[]
+  onboardState    OnboardState?
+}
+
+model ChatSettings {
+  id          String @id @default(cuid())
+  userId      String @unique
+  user        User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  enabled     Boolean @default(true)
+  theme       String  @default("dark")
+  maxMessages String  @default("最近 50 則")
+  fontSize    String  @default("中")
+}
+
+model SubtitleConfig {
+  id        String @id @default(cuid())
+  userId    String @unique
+  user      User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  font      String @default("預設")
+  fontSize  String @default("中 (24px)")
+  textColor String @default("#FFFFFF")
+  bgColor   String @default("rgba(0,0,0,0.7)")
+  position  String @default("底部置中")
+  enabled   Boolean @default(true)
+}
+
+model DonationGoal {
+  id        String @id @default(cuid())
+  userId    String
+  user      User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String
+  emoji     String @default("🎯")
+  current   Int    @default(0)
+  goal      Int
+  sortOrder Int    @default(0)
+}
+
+model OBSSource {
+  id        String  @id @default(cuid())
+  userId    String
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sourceKey String
+  name      String
+  token     String
+  enabled   Boolean @default(true)
+}
+
+model StreamSession {
+  id        String @id @default(cuid())
+  userId    String
+  user      User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String
+  date      String
+  views     Int    @default(0)
+  avgTime   String @default("0m")
+  msgs      Int    @default(0)
+  donations Int    @default(0)
+}
+
+model PlatformConnection {
+  id             String   @id @default(cuid())
+  userId         String
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  platform       String
+  connected      Boolean  @default(false)
+  accessToken    String?
+  refreshToken   String?
+  tokenExpiresAt DateTime?
+  channelId      String?
+  channelName    String?
+  channelAvatar  String?
+
+  @@unique([userId, platform])
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  platform  String
+  createdAt DateTime @default(now())
+}
+
+model ZixiDonation {
+  id           String   @id @default(cuid())
+  userId       String
+  donorAddress String
+  amount       Float
+  token        String   @default("ZXC")
+  txHash       String?
+  message      String   @default("")
+  status       String   @default("pending")
+  createdAt    DateTime @default(now())
+}
+
+model ChatMessage {
+  id        String   @id @default(cuid())
+  userId    String
+  platform  String
+  userName  String
+  message   String
+  avatarUrl String  @default("")
+  isOwner   Boolean @default(false)
+  createdAt DateTime @default(now())
+}
+
+model OnboardState {
+  id     String @id @default(cuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  step1  Boolean @default(false)
+  step2  Boolean @default(false)
+  step3  Boolean @default(false)
+  step4  Boolean @default(false)
+}
