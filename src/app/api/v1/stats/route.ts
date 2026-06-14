@@ -14,10 +14,21 @@ export async function GET(req: Request) {
       if (!conn.accessToken) continue;
       try {
         if (conn.platform === "youtube") {
+          let token = conn.accessToken;
+          // Refresh if expired
+          if (conn.refreshToken && conn.tokenExpiresAt && new Date(conn.tokenExpiresAt) < new Date()) {
+            const r = await fetch("https://oauth2.googleapis.com/token", {
+              method: "POST",
+              headers: { "Content-Type": "application/x-www-form-urlencoded" },
+              body: new URLSearchParams({ client_id: process.env.YOUTUBE_CLIENT_ID || "", client_secret: process.env.YOUTUBE_CLIENT_SECRET || "", refresh_token: conn.refreshToken, grant_type: "refresh_token" }),
+            });
+            if (r.ok) { const td: any = await r.json(); token = td.access_token; await prisma.platformConnection.update({ where: { id: conn.id }, data: { accessToken: token, tokenExpiresAt: new Date(Date.now() + (td.expires_in || 3600) * 1000) } }); }
+          }
           const res = await fetch("https://www.googleapis.com/youtube/v3/channels?part=statistics&mine=true", {
-            headers: { Authorization: `Bearer ${conn.accessToken}` },
+            headers: { Authorization: `Bearer ${token}` },
           });
           if (res.ok) { const d: any = await res.json(); ytSubs = parseInt(d.items?.[0]?.statistics?.subscriberCount || "0"); }
+          else { const errText = await res.text(); console.error(`YouTube API error (${res.status}):`, errText); }
         } else if (conn.platform === "twitch") {
           const res = await fetch("https://api.twitch.tv/helix/users", {
             headers: { Authorization: `Bearer ${conn.accessToken}`, "Client-Id": process.env.TWITCH_CLIENT_ID || "" },
