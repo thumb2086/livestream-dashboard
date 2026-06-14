@@ -26,6 +26,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ token: 
       msg: d.message || "感謝贊助！",
     })));
 
+    const obsToken = token;
     const html = `<!DOCTYPE html>
 <html style="margin:0;background:transparent;overflow:hidden">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
@@ -35,6 +36,8 @@ export async function GET(_req: Request, { params }: { params: Promise<{ token: 
 (function(){ var container=document.getElementById('alert-container'), idx=0;
   var donations=${donationsJson};
   var demoMode=${demoMode};
+  var obsToken="${obsToken}";
+  var apiBase=window.location.origin;
   function showAlert(a){
     var el=document.createElement('div');
     el.style.cssText='display:flex;align-items:center;gap:14px;background:rgba(0,0,0,0.85);border-radius:16px;padding:16px 24px;min-width:320px;transform:translateY(20px);opacity:0;transition:all 0.5s ease;border:1px solid rgba(255,86,0,0.3)';
@@ -47,7 +50,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ token: 
   function showNext(){ if(idx<donations.length){ showAlert(donations[idx]); idx++; } }
   showNext();
   setInterval(function(){
-    fetch(window.location.pathname.replace('/overlay/alerts/','/api/v1/zixi-donations?status=confirmed'))
+    fetch(apiBase+'/api/v1/zixi-donations?status=confirmed&token='+obsToken)
       .then(function(r){return r.json()}).then(function(d){
         if(d.donations&&d.donations.length>donations.length){
           for(var i=donations.length;i<d.donations.length;i++){

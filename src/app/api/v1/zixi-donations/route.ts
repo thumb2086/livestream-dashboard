@@ -44,12 +44,24 @@ export async function POST(req: Request) {
 
 export async function GET(req: Request) {
   try {
-    const user = await getOrCreateUser(getSessionId(req));
-    if (!user) return unauthorized();
     const { searchParams } = new URL(req.url);
     const status = searchParams.get("status");
+    const token = searchParams.get("token");
 
-    const where: any = { userId: user.id };
+    let userId: string | null = null;
+
+    // Support both: authenticated user (session) and OBS source (token)
+    if (token) {
+      const source = await prisma.oBSSource.findFirst({ where: { token, sourceKey: "alerts" } });
+      if (source) userId = source.userId;
+    }
+    if (!userId) {
+      const user = await getOrCreateUser(getSessionId(req));
+      if (!user) return unauthorized();
+      userId = user.id;
+    }
+
+    const where: any = { userId };
     if (status) where.status = status;
 
     const donations = await prisma.zixiDonation.findMany({
