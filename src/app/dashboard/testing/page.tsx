@@ -139,7 +139,6 @@ export default function TestingPage() {
               {[
                 { label: "聊天室疊加層", key: "chat" },
                 { label: "斗內進度條", key: "donations" },
-                { label: "字幕疊加層", key: "subtitles" },
                 { label: "斗內通知", key: "alerts" },
                 { label: "頻道統計", key: "stats" },
               ].map((item) => {
