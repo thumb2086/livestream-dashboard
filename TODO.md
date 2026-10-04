@@ -332,6 +332,15 @@ Webhook 一直存在，但**沒有任何程式去註冊訂閱** —— Twitch �
 
 **11 頁全部 Tailwind 歸零。**
 
+> ⚠️ **這 11 頁不等於「全部頁面」。** 這裡的 11 是「有對應 livio CSS 家族」的頁面。
+> `/dashboard` 底下實際有 **32 個 page.tsx，其中 20 個仍是 Tailwind**：
+> testing、public-page、zixi、connections、donations/alerts、meetups、shared-donation-rooms、
+> donation-cards、commands、donation-video、obs、zixi/donations、donation-video/review、
+> account、donation-ticker、payment-settings、donations/records、leaderboard、
+> membership/usage、membership/billing。
+> 這些頁在 livio CSS 裡沒有對應家族可抄，是**另一種工作**（得自己設計或沿用共用 primitive），
+> 不要因為上面寫「歸零」就以為全站清乾淨了。
+
 > **審計工具的限制**：`scripts/test-page-families.ts` 掃描「頁面自己寫的 class」。
 > 用共用外殼的頁面，版面 class 是執行時由 `family` 參數產生的，掃描看不到 ——
 > 所以那幾頁的 `own/css` 偏低**不代表未遷移**。它的可靠用途只有兩個：
@@ -467,9 +476,17 @@ CSS 選擇器**很多是巢狀在某個 page 家族底下**的，不是全域：
 
 ### P2 — 品質
 
-- `useFeature` 儲存無 debounce。
-- 尚無測試（Vitest / Playwright）。
-- 無 Error Boundary、無統一 Suspense loading。
+- ~~`useFeature` 儲存無 debounce~~ —— **這條前提是錯的，別加 debounce。**
+  `useFeature` 的 `set()` 只改本地 state，持久化要按頁面上的「儲存設定」按鈕
+  （`<Btn onClick={save}>`）才會送出。沒有「每鍵一請求」的問題。
+  （當初會覺得有問題，是因為 grep 找 `save()` 沒找到 —— 實際寫法是
+  `onClick={save}` 傳參考，沒有括號。8 個消費頁都正常存檔。）
+- ~~無 Error Boundary~~ ✅ 已補 `src/app/{error,global-error,not-found,loading}.tsx`
+  與 `src/app/dashboard/error.tsx`。**注意 Next 16 的 prop 是 `unstable_retry`，
+  不是舊版的 `reset`** —— 憑訓練資料寫會靜默失效（見 `node_modules/next/dist/docs/01-app/01-getting-started/10-error-handling.md`）。
+  已實測：`/_not-found` 回 404 且渲染我們的頁面；`unstable_retry` 有出現在 client chunk。
+  尚未實測：故意讓頁面 crash 來看 error fallback（編譯與接線已確認）。
+- 尚無 Vitest / Playwright（目前是 9 支自製 script 套件）。
 - a11y：已補 `role="switch"` / `aria-current` / `role="tabpanel"`。
 
 ---

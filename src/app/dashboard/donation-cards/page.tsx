@@ -3,7 +3,8 @@
 import {
   PageHeader, Panel, Btn, Field, Input, SelectRow, Toggle, Badge, useFeature,
 } from "@/components/ui";
-import { Copy, Check, Layers2, Play } from "lucide-react";
+import { OverlayOutput, OverlayTokenProvider } from "@/components/overlay-settings";
+import { Layers2, Play } from "lucide-react";
 import { useState } from "react";
 
 type Card = {
@@ -45,18 +46,16 @@ const RARITY: Record<string, { bg: string; fg: string }> = {
 };
 
 export default function DonationCardsPage() {
-  const { value: c, set, save, saving, saved } = useFeature<Cfg>("donation-cards", DEFAULTS);
-  const [copied, setCopied] = useState(false);
-  const [preview, setPreview] = useState<string | null>(null);
+  return (
+    <OverlayTokenProvider overlayKey="donation-cards">
+      <DonationCardsInner />
+    </OverlayTokenProvider>
+  );
+}
 
-  const obsUrl = "/overlay/donation-cards/[token]";
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(obsUrl);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1800);
-    } catch {}
-  };
+function DonationCardsInner() {
+  const { value: c, set, save, saving, saved } = useFeature<Cfg>("donation-cards", DEFAULTS);
+  const [preview, setPreview] = useState<string | null>(null);
 
   const setCards = (cards: Card[]) => set("cards", cards);
   const patch = (id: string, p: Partial<Card>) => setCards(c.cards.map((x) => (x.id === id ? { ...x, ...p } : x)));
@@ -159,16 +158,10 @@ export default function DonationCardsPage() {
             </div>
           </Panel>
 
-          <Panel title="OBS 輸出">
-            <div className="flex flex-col gap-[10px]">
-              <code className="block overflow-x-auto rounded-[var(--ic-radius-md)] border border-[var(--ic-hairline)] bg-[var(--ic-surface-3)] px-[12px] py-[10px] font-mono text-[12px] text-[var(--ic-ink-subtle)]">
-                {obsUrl}
-              </code>
-              <Btn variant="secondary" onClick={copy}>
-                {copied ? <Check size={15} /> : <Copy size={15} />} {copied ? "已複製" : "複製網址"}
-              </Btn>
-            </div>
-          </Panel>
+          {/* Real token URL from the overlay API, plus a reissue button.
+              This used to copy the literal string "/overlay/donation-cards/[token]",
+              which pasted a URL that cannot resolve. */}
+          <OverlayOutput title="OBS 輸出" />
 
           <Btn onClick={save} disabled={saving}>
             {saving ? "儲存中…" : saved ? "已儲存" : "儲存設定"}

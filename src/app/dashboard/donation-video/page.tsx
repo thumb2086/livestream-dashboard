@@ -3,8 +3,8 @@
 import {
   PageHeader, Panel, Btn, Field, Input, SelectRow, Toggle, Badge, useFeature,
 } from "@/components/ui";
-import { Copy, Check, Video } from "lucide-react";
-import { useState } from "react";
+import { OverlayOutput, OverlayTokenProvider } from "@/components/overlay-settings";
+import { Video } from "lucide-react";
 
 type Cfg = {
   enabled: boolean;
@@ -39,17 +39,15 @@ const DEFAULTS: Cfg = {
 };
 
 export default function DonationVideoPage() {
-  const { value: c, set, save, saving, saved } = useFeature<Cfg>("donation-video", DEFAULTS);
-  const [copied, setCopied] = useState(false);
+  return (
+    <OverlayTokenProvider overlayKey="donation-video">
+      <DonationVideoInner />
+    </OverlayTokenProvider>
+  );
+}
 
-  const obsUrl = "/overlay/donation-video/[token]";
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(obsUrl);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1800);
-    } catch {}
-  };
+function DonationVideoInner() {
+  const { value: c, set, save, saving, saved } = useFeature<Cfg>("donation-video", DEFAULTS);
 
   const perUnit = Number(c.amountPerUnit) || 1;
   const perMinute = Number(c.unitsPerMinute) || 1;
@@ -131,16 +129,10 @@ export default function DonationVideoPage() {
             </div>
           </Panel>
 
-          <Panel title="OBS 輸出">
-            <div className="flex flex-col gap-[10px]">
-              <code className="block overflow-x-auto rounded-[var(--ic-radius-md)] border border-[var(--ic-hairline)] bg-[var(--ic-surface-3)] px-[12px] py-[10px] font-mono text-[12px] text-[var(--ic-ink-subtle)]">
-                {obsUrl}
-              </code>
-              <Btn variant="secondary" onClick={copy}>
-                {copied ? <Check size={15} /> : <Copy size={15} />} {copied ? "已複製" : "複製網址"}
-              </Btn>
-            </div>
-          </Panel>
+          {/* Real token URL from the overlay API, plus a reissue button.
+              This used to copy the literal string "/overlay/donation-video/[token]",
+              which pasted a URL that cannot resolve. */}
+          <OverlayOutput title="OBS 輸出" />
 
           <Btn onClick={save} disabled={saving}>
             {saving ? "儲存中…" : saved ? "已儲存" : "儲存設定"}
