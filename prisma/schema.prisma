@@ -25,6 +25,8 @@ model User {
   demoMode           Boolean @default(false)
   email              String  @default("")
   zixiWallet         String  @default("")
+  zixiAccessToken    String  @default("")
+  zixiTokenExpiresAt DateTime?
   avatar             String  @default("")
 
   chatSettings    ChatSettings?
@@ -35,6 +37,24 @@ model User {
   connections     PlatformConnection[]
   sessions        Session[]
   onboardState    OnboardState?
+  captionSessions CaptionSession[] @relation("CaptionSessionUser")
+  captionSegments CaptionSegment[] @relation("CaptionSegmentUser")
+  liveCommands    LiveCommand[]
+  giveaways       Giveaway[]
+  replayNotes     ReplayNote[]
+
+  featureSettings FeatureSettings[]
+  donationRecords DonationRecord[]
+  donationVideos  DonationVideo[]
+  products        Product[]
+  orders          Order[]
+  meetups         Meetup[]
+  replayJobs      ReplayJob[]
+  subscription    Subscription?
+  usageEvents     UsageEvent[]
+  invoices        Invoice[]
+  paymentSettings PaymentSetting?
+  events          EventLog[]
 }
 
 model ChatSettings {
@@ -68,6 +88,7 @@ model DonationGoal {
   current   Int    @default(0)
   goal      Int
   sortOrder Int    @default(0)
+  videoUrl  String @default("")
 }
 
 model OBSSource {
@@ -105,6 +126,11 @@ model PlatformConnection {
   channelName    String?
   channelAvatar  String?
 
+  // Last observed live audience, refreshed from the platform. Null means
+  // "not looked up yet" which is different from 0 (= verified offline).
+  liveViewers    Int?
+  liveUpdatedAt  DateTime?
+
   @@unique([userId, platform])
 }
 
@@ -120,6 +146,7 @@ model ZixiDonation {
   id           String   @id @default(cuid())
   userId       String
   donorAddress String
+  donorName    String   @default("")
   amount       Float
   token        String   @default("ZXC")
   txHash       String?
@@ -139,6 +166,30 @@ model ChatMessage {
   createdAt DateTime @default(now())
 }
 
+model CaptionSession {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation("CaptionSessionUser", fields: [userId], references: [id], onDelete: Cascade)
+  label     String   @default("")
+  status    String   @default("active")
+  createdAt DateTime @default(now())
+  endedAt   DateTime?
+  segments  CaptionSegment[]
+}
+
+model CaptionSegment {
+  id        String   @id @default(cuid())
+  sessionId String
+  userId    String
+  user      User     @relation("CaptionSegmentUser", fields: [userId], references: [id], onDelete: Cascade)
+  text      String
+  speaker   String   @default("")
+  seq       Int      @default(0)
+  status    String   @default("final")
+  createdAt DateTime @default(now())
+  session   CaptionSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+}
+
 model OnboardState {
   id     String @id @default(cuid())
   userId String @unique
@@ -147,4 +198,285 @@ model OnboardState {
   step2  Boolean @default(false)
   step3  Boolean @default(false)
   step4  Boolean @default(false)
+}
+
+model LiveCommand {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  trigger   String
+  response  String   @default("")
+  enabled   Boolean  @default(true)
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+
+  @@unique([userId, trigger])
+  @@index([userId])
+}
+
+model Giveaway {
+  id        String            @id @default(cuid())
+  userId    String
+  user      User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String
+  keyword   String            @default("")
+  enabled   Boolean           @default(true)
+  winner    String            @default("")
+  createdAt DateTime          @default(now())
+  entrants  GiveawayEntrant[]
+
+  @@index([userId])
+}
+
+model GiveawayEntrant {
+  id         String   @id @default(cuid())
+  giveawayId String
+  giveaway   Giveaway @relation(fields: [giveawayId], references: [id], onDelete: Cascade)
+  name       String
+  createdAt  DateTime @default(now())
+
+  @@unique([giveawayId, name])
+  @@index([giveawayId])
+}
+
+model ReplayNote {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String
+  sourceUrl String   @default("")
+  startsAt  String   @default("")
+  endsAt    String   @default("")
+  note      String   @default("")
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+// ---------------------------------------------------------------------------
+// Generic per-feature settings store.
+// Mirrors the reference console's `feature_settings (owner, feature_key, jsonb)`
+// approach so every overlay/config page can persist JSON without a table each.
+// ---------------------------------------------------------------------------
+model FeatureSettings {
+  id         String   @id @default(cuid())
+  userId     String
+  featureKey String
+  settings   Json     @default("{}")
+  updatedAt  DateTime @updatedAt
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, featureKey])
+}
+
+// 金流設定
+model PaymentSetting {
+  id             String   @id @default(cuid())
+  userId         String   @unique
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  ecpayEnabled   Boolean  @default(false)
+  ecpayMerchant  String   @default("")
+  // Stored encrypted (src/lib/secret-crypto.ts). Both parts are required by the
+  // CheckMacValue algorithm; without HashIV no signature can be computed.
+  ecpayHashKey   String   @default("")
+  ecpayHashIv    String   @default("")
+  opayEnabled    Boolean  @default(false)
+  opayMerchant   String   @default("")
+  opayHashKey    String   @default("")
+  opayHashIv     String   @default("")
+  paypalEnabled  Boolean  @default(false)
+  paypalClientId String   @default("")
+  minAmount      Int      @default(30)
+  updatedAt      DateTime @updatedAt
+}
+
+// 斗內紀錄
+model DonationRecord {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  source    String   @default("zixi")
+  donorName String   @default("")
+  amount    Float    @default(0)
+  currency  String   @default("TWD")
+  message   String   @default("")
+  status    String   @default("succeeded")
+  tradeNo   String   @default("")
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+}
+
+// 斗內影片 + 影片審核佇列
+model DonationVideo {
+  id         String    @id @default(cuid())
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  donorName  String    @default("")
+  amount     Float     @default(0)
+  videoUrl   String
+  startSec   Int       @default(0)
+  endSec     Int       @default(0)
+  message    String    @default("")
+  status     String    @default("pending_review")
+  rejectNote String    @default("")
+  createdAt  DateTime  @default(now())
+  reviewedAt DateTime?
+
+  @@index([userId, status])
+}
+
+// 周邊商店
+model Product {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name        String
+  description String   @default("")
+  price       Int      @default(0)
+  currency    String   @default("TWD")
+  stock       Int      @default(-1)
+  imageUrl    String   @default("")
+  active      Boolean  @default(true)
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  orders      Order[]
+
+  @@index([userId])
+}
+
+model Order {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  productId String?
+  product   Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+  buyerName String   @default("")
+  quantity  Int      @default(1)
+  amount    Int      @default(0)
+  status    String   @default("pending")
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+}
+
+// 台聚活動
+model Meetup {
+  id          String              @id @default(cuid())
+  userId      String
+  user        User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title       String
+  description String              @default("")
+  location    String              @default("")
+  startsAt    DateTime
+  endsAt      DateTime?
+  capacity    Int                 @default(0)
+  price       Int                 @default(0)
+  status      String              @default("open")
+  createdAt   DateTime            @default(now())
+  registrations MeetupRegistration[]
+
+  @@index([userId, startsAt])
+}
+
+model MeetupRegistration {
+  id        String   @id @default(cuid())
+  meetupId  String
+  meetup    Meetup   @relation(fields: [meetupId], references: [id], onDelete: Cascade)
+  name      String
+  createdAt DateTime @default(now())
+
+  @@unique([meetupId, name])
+}
+
+// 回放分析
+model ReplayJob {
+  id          String         @id @default(cuid())
+  userId      String
+  user        User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title       String
+  replayUrl   String
+  language    String         @default("zh")
+  status      String         @default("queued")
+  progress    Int            @default(0)
+  summary     String         @default("")
+  createdAt   DateTime       @default(now())
+  completedAt DateTime?
+  segments    ReplaySegment[]
+
+  @@index([userId, createdAt])
+}
+
+model ReplaySegment {
+  id         String    @id @default(cuid())
+  jobId      String
+  job        ReplayJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  startSec   Int       @default(0)
+  endSec     Int       @default(0)
+  transcript String    @default("")
+  score      Int       @default(0)
+  hook       Int       @default(0)
+  peak       Int       @default(0)
+
+  @@index([jobId, startSec])
+}
+
+// 會員
+model Subscription {
+  id               String    @id @default(cuid())
+  userId           String    @unique
+  user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  planKey          String    @default("free")
+  billingMode      String    @default("monthly")
+  status           String    @default("active")
+  currentPeriodEnd DateTime?
+  createdAt        DateTime  @default(now())
+}
+
+model UsageEvent {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  metric    String
+  quantity  Int      @default(1)
+  note      String   @default("")
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+}
+
+model Invoice {
+  id       String   @id @default(cuid())
+  userId   String
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  number   String   @unique
+  amount   Int      @default(0)
+  tax      Int      @default(0)
+  status   String   @default("paid")
+  period   String   @default("")
+  issuedAt DateTime @default(now())
+
+  @@index([userId, issuedAt])
+}
+
+// Inbound platform events (follows, subs, raids, redemptions).
+// The overlays poll these, so `externalId` must stay unique per platform.
+model EventLog {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  platform   String   @default("twitch")
+  kind       String
+  externalId String   @default("")
+  actorName  String   @default("")
+  actorId    String   @default("")
+  message    String   @default("")
+  amount     Float    @default(0)
+  tier       String   @default("")
+  months     Int      @default(0)
+  payload    Json     @default("{}")
+  createdAt  DateTime @default(now())
+
+  @@unique([platform, kind, externalId])
+  @@index([userId, kind, createdAt])
 }

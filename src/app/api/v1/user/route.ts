@@ -2,7 +2,10 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getOrCreateUser, getSessionId, unauthorized } from "@/lib/getUser";
 
-const ALLOWED = new Set(["name", "username", "email", "publicPage", "chosenPlan", "donationMinAmount", "donationSound", "donationTotal", "donationDonors", "totalViews", "followers", "totalMessages", "demoMode", "zixiWallet", "avatar"]);
+// Only user-editable profile fields. Server-computed (chosenPlan, totals, followers,
+// messages) and identity-linked (email) must NOT be self-writable — they allow
+// privilege escalation / stats forgery / OAuth-merge takeover.
+const ALLOWED = new Set(["name", "username", "publicPage", "donationMinAmount", "donationSound", "demoMode", "zixiWallet", "avatar"]);
 
 export async function GET(req: Request) {
   try {

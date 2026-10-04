@@ -58,7 +58,7 @@ export default function ZixiDonationsPage() {
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
                   <strong className="text-[14px] font-[600] text-[var(--ic-ink)]">
-                    {d.donorAddress?.slice(0, 6)}...{d.donorAddress?.slice(-4)}
+                    {d.donorName || (d.donorAddress ? d.donorAddress.slice(0,6)+'...'+d.donorAddress.slice(-4) : '匿名')}
                   </strong>
                   <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-[500] ${
                     d.status === "confirmed" ? "border-green-200 bg-green-50 text-green-700" : "border-yellow-200 bg-yellow-50 text-yellow-700"

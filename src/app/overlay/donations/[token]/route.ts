@@ -6,7 +6,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ token: 
   try {
     const { token } = await params;
     const source = await prisma.oBSSource.findFirst({
-      where: { token, sourceKey: "donations" },
+      where: { token, sourceKey: "donation-goal" },
       include: { user: { include: { donationGoals: { orderBy: { sortOrder: "asc" } } } } },
     });
     if (!source || !source.enabled) return new Response("Not Found", { status: 404 });

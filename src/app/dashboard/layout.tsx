@@ -9,15 +9,12 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       <RequireAuth>
         <ToastProvider>
           <TopNav />
-          <div className="dashboard-shell" style={{
-            display: "grid",
-            gridTemplateColumns: "264px minmax(0, 1fr)",
-            minHeight: "calc(100vh - 59px)",
-            background: "var(--ic-canvas)",
-          }}>
-            <Sidebar />
-            <main className="p-6">{children}</main>
-          </div>
+          <main className="dashboard-shell">
+            <aside className="dashboard-sidebar">
+              <Sidebar />
+            </aside>
+            <section className="dashboard-main">{children}</section>
+          </main>
         </ToastProvider>
       </RequireAuth>
     </div>

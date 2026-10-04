@@ -1,28 +1,60 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getOrCreateUser, getSessionId, unauthorized } from "@/lib/getUser";
+import { OVERLAYS, newOverlayToken, overlayByKey, overlayUrl } from "@/lib/overlays";
+
+/**
+ * Issues and rotates Browser Source tokens for OBS overlays.
+ * GET              -> every registered overlay plus its token (missing ones are
+ *                     created on first read so the list is always complete).
+ * POST _meta=ensure   -> make sure one specific overlay exists, return its token
+ * POST _meta=reissue  -> rotate a token (invalidates the old URL)
+ * POST _meta=toggle    -> enable/disable an overlay
+ */
+function originOf(req: Request) {
+  const url = new URL(req.url);
+  return `${url.protocol}//${url.host}`;
+}
+
+async function listAll(userId: string, origin: string) {
+  const rows = await (prisma as any).oBSSource.findMany({ where: { userId } });
+  const byKey = new Map(rows.map((r: any) => [r.sourceKey, r]));
+
+  // Create any overlay that has never been issued for this account.
+  for (const def of OVERLAYS) {
+    if (byKey.has(def.key)) continue;
+    const row = await (prisma as any).oBSSource.create({
+      data: {
+        userId,
+        sourceKey: def.key,
+        name: def.name,
+        token: newOverlayToken(),
+        enabled: def.defaultEnabled,
+      },
+    });
+    byKey.set(def.key, row);
+  }
+
+  return OVERLAYS.map((def) => {
+    const row: any = byKey.get(def.key);
+    return {
+      key: def.key,
+      name: def.name,
+      path: def.path,
+      hasRoute: def.hasRoute,
+      id: row.id,
+      token: row.token,
+      enabled: row.enabled,
+      url: overlayUrl(origin, def.path, row.token),
+    };
+  });
+}
 
 export async function GET(req: Request) {
   try {
     const user = await getOrCreateUser(getSessionId(req));
     if (!user) return unauthorized();
-    let sources = await prisma.oBSSource.findMany({ where: { userId: user.id } });
-    // Auto-create missing default sources for existing users
-    const defaultSources = [
-      { sourceKey: "chat", name: "聊天室疊加層" },
-      { sourceKey: "donations", name: "斗內進度條" },
-      { sourceKey: "subtitles", name: "字幕疊加層" },
-      { sourceKey: "alerts", name: "斗內通知" },
-      { sourceKey: "stats", name: "頻道統計疊加層" },
-    ];
-    const existingKeys = new Set(sources.map(s => s.sourceKey));
-    const missing = defaultSources.filter(d => !existingKeys.has(d.sourceKey));
-    for (const d of missing) {
-      const token = Math.random().toString(36).substring(2,10) + Date.now().toString(36);
-      const alwaysEnabled = ["chat", "subtitles", "alerts"];
-      await prisma.oBSSource.create({ data: { userId: user.id, sourceKey: d.sourceKey, name: d.name, token, enabled: alwaysEnabled.includes(d.sourceKey) } });
-    }
-    if (missing.length > 0) sources = await prisma.oBSSource.findMany({ where: { userId: user.id } });
+    const sources = await listAll(user.id, originOf(req));
     return NextResponse.json({ sources });
   } catch (e) {
     console.error("GET /api/v1/obs error:", e);
@@ -35,29 +67,46 @@ export async function POST(req: Request) {
     const user = await getOrCreateUser(getSessionId(req));
     if (!user) return unauthorized();
     const body = await req.json();
+    const origin = originOf(req);
+
+    if (body._meta === "ensure") {
+      const def = overlayByKey(typeof body.key === "string" ? body.key : "");
+      if (!def) return NextResponse.json({ error: "Unknown overlay key" }, { status: 400 });
+      const sources = await listAll(user.id, origin);
+      const mine = sources.find((s) => s.key === def.key);
+      return NextResponse.json({ sources, source: mine });
+    }
 
     if (body._meta === "toggle") {
       if (typeof body.id !== "string" || typeof body.enabled !== "boolean") {
         return NextResponse.json({ error: "Invalid request" }, { status: 400 });
       }
-      await prisma.oBSSource.updateMany({
+      await (prisma as any).oBSSource.updateMany({
         where: { id: body.id, userId: user.id },
         data: { enabled: body.enabled },
       });
-    } else if (body._meta === "regenerate") {
+    } else if (body._meta === "reissue") {
       if (typeof body.id !== "string") {
         return NextResponse.json({ error: "Invalid request" }, { status: 400 });
       }
-      const token = Math.random().toString(36).substring(2, 10) + Math.random().toString(36).substring(2, 6);
-      await prisma.oBSSource.updateMany({
+      await (prisma as any).oBSSource.updateMany({
         where: { id: body.id, userId: user.id },
-        data: { token },
+        data: { token: newOverlayToken() },
+      });
+    } else if (body._meta === "rename") {
+      const name = typeof body.name === "string" ? body.name.trim().slice(0, 60) : "";
+      if (!name || typeof body.id !== "string") {
+        return NextResponse.json({ error: "Invalid request" }, { status: 400 });
+      }
+      await (prisma as any).oBSSource.updateMany({
+        where: { id: body.id, userId: user.id },
+        data: { name },
       });
     } else {
       return NextResponse.json({ error: "Unknown action" }, { status: 400 });
     }
 
-    const sources = await prisma.oBSSource.findMany({ where: { userId: user.id } });
+    const sources = await listAll(user.id, origin);
     return NextResponse.json({ sources });
   } catch (e) {
     console.error("POST /api/v1/obs error:", e);

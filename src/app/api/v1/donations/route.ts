@@ -36,9 +36,11 @@ export async function POST(req: Request) {
     const body = await req.json();
 
     if (body._meta === "updateUser") {
+      // Totals are server-computed via simulate/confirmed donations only.
+      // Accepting totalReceived/donorCount from client allows stats forgery.
       await prisma.user.update({
         where: { id: user.id },
-        data: { donationMinAmount: body.minAmount ?? user.donationMinAmount, donationSound: body.soundEffect ?? user.donationSound, donationTotal: body.totalReceived ?? user.donationTotal, donationDonors: body.donorCount ?? user.donationDonors },
+        data: { donationMinAmount: body.minAmount ?? user.donationMinAmount, donationSound: body.soundEffect ?? user.donationSound },
       });
       return refresh(user.id);
     }

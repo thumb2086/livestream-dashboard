@@ -10,8 +10,19 @@ export async function GET(req: Request) {
     let twitchFol = 0, ytSubs = 0;
     const conns = await prisma.platformConnection.findMany({ where: { userId: user.id, connected: true } });
 
+    /**
+     * Per-source outcome. A platform that is not connected, has no token, or
+     * rejected the call is reported as `known: false` — its 0 must not be shown
+     * as "0 followers", which is a different claim.
+     */
+    const sources: { platform: string; connected: boolean; known: boolean; count: number; channelName: string | null; detail: string | null }[] = [];
+
     for (const conn of conns) {
-      if (!conn.accessToken) continue;
+      const base = { platform: conn.platform, connected: true, channelName: conn.channelName, count: 0, detail: null as string | null };
+      if (!conn.accessToken) {
+        sources.push({ ...base, known: false, detail: "尚未取得存取權杖" });
+        continue;
+      }
       try {
         if (conn.platform === "youtube") {
           let token = conn.accessToken;
@@ -27,8 +38,8 @@ export async function GET(req: Request) {
           const res = await fetch("https://www.googleapis.com/youtube/v3/channels?part=statistics&mine=true", {
             headers: { Authorization: `Bearer ${token}` },
           });
-          if (res.ok) { const d: any = await res.json(); ytSubs = parseInt(d.items?.[0]?.statistics?.subscriberCount || "0"); }
-          else { const errText = await res.text(); console.error(`YouTube API error (${res.status}):`, errText); }
+          if (res.ok) { const d: any = await res.json(); ytSubs = parseInt(d.items?.[0]?.statistics?.subscriberCount || "0"); sources.push({ ...base, known: true, count: ytSubs }); }
+          else { const errText = await res.text(); console.error(`YouTube API error (${res.status}):`, errText); sources.push({ ...base, known: false, detail: `HTTP ${res.status}` }); }
         } else if (conn.platform === "twitch") {
           const res = await fetch("https://api.twitch.tv/helix/users", {
             headers: { Authorization: `Bearer ${conn.accessToken}`, "Client-Id": process.env.TWITCH_CLIENT_ID || "" },
@@ -37,10 +48,26 @@ export async function GET(req: Request) {
             const f = await fetch(`https://api.twitch.tv/helix/channels/followers?broadcaster_id=${uid}`, {
               headers: { Authorization: `Bearer ${conn.accessToken}`, "Client-Id": process.env.TWITCH_CLIENT_ID || "" },
             });
-            if (f.ok) { const fd: any = await f.json(); twitchFol = fd.total || 0; }
-          }}
+            if (f.ok) { const fd: any = await f.json(); twitchFol = fd.total ?? null; twitchFol = fd.total || 0; sources.push({ ...base, known: true, count: twitchFol }); }
+            else {
+              // Usually the token lacks moderator:read:followers.
+              const t = await f.text().catch(() => "");
+              console.error(`Twitch followers error (${f.status}):`, t.slice(0, 200));
+              sources.push({ ...base, known: false, detail: f.status === 401 ? "權杖缺少 moderator:read:followers 權限" : `HTTP ${f.status}` });
+            }
+          } else { sources.push({ ...base, known: false, detail: "找不到頻道" }); } }
+          else { sources.push({ ...base, known: false, detail: `HTTP ${res.status}` }); }
+        } else {
+          sources.push({ ...base, known: false, detail: "尚未支援的平台" });
         }
-      } catch (e) { console.error(`Failed to fetch ${conn.platform} subscribers:`, e); }
+      } catch (e) { console.error(`Failed to fetch ${conn.platform} subscribers:`, e); sources.push({ ...base, known: false, detail: "請求失敗" }); }
+    }
+
+    // Platforms the creator has not connected at all.
+    for (const p of ["twitch", "youtube"]) {
+      if (!conns.some((c) => c.platform === p)) {
+        sources.push({ platform: p, connected: false, known: false, count: 0, channelName: null, detail: "尚未串接" });
+      }
     }
 
     const total = twitchFol + ytSubs;
@@ -48,7 +75,7 @@ export async function GET(req: Request) {
       await prisma.user.update({ where: { id: user.id }, data: { followers: total } });
     }
 
-    return NextResponse.json({ followers: total, twitch: twitchFol, youtube: ytSubs });
+    return NextResponse.json({ followers: total, twitch: twitchFol, youtube: ytSubs, sources });
   } catch (e) {
     console.error("GET /api/v1/stats error:", e);
     return NextResponse.json({ error: "Failed to fetch stats" }, { status: 500 });

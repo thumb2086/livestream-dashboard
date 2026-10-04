@@ -13,6 +13,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ token: 
 
     const user = source.user;
     const demoMode = user.demoMode;
+    console.error("Chat overlay demoMode:", demoMode);
     const s = user.chatSettings;
     const isDark = s?.theme === "dark";
     const isTransparent = s?.theme === "transparent";
@@ -52,7 +53,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ token: 
       if(d.messages.length>0)lastTime=d.messages[d.messages.length-1].createdAt;
     }).catch(function(){});
   }
-  setInterval(poll,3000);setTimeout(poll,1000);
+  setInterval(poll,10000);setTimeout(poll,2000);
   ${demoMode ? `
   var demo=setInterval(function(){addMsg(["小明","阿花","直播迷"][Math.floor(Math.random()*3)],["Nice!","加油！","哈哈哈","讚讚"][Math.floor(Math.random()*4)],nc(),"");},8000);
   setTimeout(function(){addMsg("系統","聊天室已連線 — 自動模擬中",nc(),"");},500);` : ''}

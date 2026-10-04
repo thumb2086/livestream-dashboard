@@ -7,20 +7,25 @@ import { useToast } from "@/components/toast/Toast";
 
 export default function DonationAlertsPage() {
   const [obsSources, setObsSources] = useState<any[]>([]);
+  const [userName, setUserName] = useState("");
   const [origin, setOrigin] = useState("");
   const [copied, setCopied] = useState(false);
   const { show } = useToast();
 
   useEffect(() => {
     setOrigin(window.location.origin);
-    api.getOBS().then(o => setObsSources(o.sources)).catch(() => {});
+    Promise.all([api.getOBS(), api.getUser()]).then(([o, u]) => { setObsSources(o.sources); setUserName(u.username || ""); }).catch(() => {});
   }, []);
 
   const alertSource = obsSources.find((s: any) => s.sourceKey === "alerts");
   const url = alertSource ? `${origin}/overlay/alerts/${alertSource.token}` : null;
 
-  const testAlert = () => {
+  const testAlert = async () => {
     show("🧪 測試斗內通知已觸發！（檢查 OBS 疊加層）", "success");
+    await fetch("/api/v1/zixi-donations", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: userName, donorAddress: "0xTestDonor", amount: 300, token: "ZXC", message: "測試斗內通知！", isTest: true }),
+    }).catch(() => {});
   };
 
   return (

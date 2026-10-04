@@ -2,99 +2,196 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useEffect, useState } from "react";
 import {
-  LayoutDashboard, Globe, Cable, MessageSquare, Heart, Bell,
-  Monitor, FlaskConical, BarChart3, Terminal, Wallet,
+  Globe, Cable, CreditCard, Clapperboard, UserCog,
+  ShoppingBag, CalendarDays, Layers2, Users2, Bell, ScrollText,
+  Target, ClipboardCheck, MoveHorizontal, Trophy, FlaskConical,
+  UserPlus, MessageSquare, Captions, BarChart3, Eye, MonitorPlay,
+  Terminal, Monitor, Crown, Gauge, Receipt, Wallet, Heart, Video,
+  type LucideIcon,
 } from "lucide-react";
+import { api } from "@/lib/api";
 
-const sidebarSections = [
+type Section = { title: string; links: { label: string; href: string; icon: LucideIcon }[] };
+
+const SECTIONS: Section[] = [
   {
-    title: "主要",
+    title: "控制台",
     links: [
-      { label: "控制中心", href: "/dashboard", icon: LayoutDashboard },
-      { label: "公開頁面", href: "/dashboard/public-page", icon: Globe },
+      { label: "觀眾斗內頁設定", href: "/dashboard/public-page", icon: Globe },
+      { label: "平台授權", href: "/dashboard/connections", icon: Cable },
+      { label: "金流設定", href: "/dashboard/payment-settings", icon: CreditCard },
+      { label: "回放分析", href: "/dashboard/replay-analysis", icon: Clapperboard },
+      { label: "帳戶設定", href: "/dashboard/account", icon: UserCog },
     ],
   },
   {
-    title: "串接",
+    title: "SHOP 與活動",
     links: [
-      { label: "平台串接", href: "/dashboard/connections", icon: Cable },
-      { label: "ZIXI 錢包", href: "/dashboard/zixi", icon: Wallet },
+      { label: "周邊商店", href: "/dashboard/commerce", icon: ShoppingBag },
+      { label: "台聚活動", href: "/dashboard/meetups", icon: CalendarDays },
     ],
   },
   {
-    title: "互動工具",
+    title: "斗內工具",
     links: [
-      { label: "聊天室", href: "/dashboard/chat", icon: MessageSquare },
-      { label: "斗內進度", href: "/dashboard/donations", icon: Heart },
+      { label: "斗內卡牌", href: "/dashboard/donation-cards", icon: Layers2 },
+      { label: "共用斗內房間", href: "/dashboard/shared-donation-rooms", icon: Users2 },
       { label: "斗內通知", href: "/dashboard/donations/alerts", icon: Bell },
-      { label: "直播指令", href: "/dashboard/commands", icon: Terminal },
+      { label: "斗內紀錄", href: "/dashboard/donations/records", icon: ScrollText },
+      { label: "斗內進度條", href: "/dashboard/donations", icon: Target },
+      { label: "斗內影片", href: "/dashboard/donation-video", icon: Video },
+      { label: "影片審核佇列", href: "/dashboard/donation-video/review", icon: ClipboardCheck },
+      { label: "斗內跑馬燈", href: "/dashboard/donation-ticker", icon: MoveHorizontal },
+      { label: "排行榜", href: "/dashboard/leaderboard", icon: Trophy },
+      { label: "測試頁面", href: "/dashboard/testing", icon: FlaskConical },
     ],
   },
   {
-    title: "輸出與測試",
+    title: "OVERLAY 與互動",
     links: [
+      { label: "追隨與訂閱提醒", href: "/dashboard/follower-alert", icon: UserPlus },
+      { label: "聊天室", href: "/dashboard/chat", icon: MessageSquare },
+      { label: "即時字幕", href: "/dashboard/subtitles", icon: Captions },
+      { label: "頻道數據", href: "/dashboard/stats", icon: BarChart3 },
+      { label: "同時觀看人數", href: "/dashboard/live-viewers", icon: Eye },
+      { label: "即時比分板", href: "/dashboard/scoreboard", icon: MonitorPlay },
+      { label: "直播指令機器人", href: "/dashboard/commands", icon: Terminal },
       { label: "OBS 輸出", href: "/dashboard/obs", icon: Monitor },
-      { label: "測試與整合", href: "/dashboard/testing", icon: FlaskConical },
     ],
   },
   {
-    title: "數據",
-    links: [
-      { label: "頻道統計", href: "/dashboard/stats", icon: BarChart3 },
-    ],
-  },
-
-  {
-    title: "ZIXI",
+    title: "ZIXI 生態系",
     links: [
       { label: "錢包設定", href: "/dashboard/zixi", icon: Wallet },
       { label: "捐款記錄", href: "/dashboard/zixi/donations", icon: Heart },
     ],
   },
+  {
+    title: "會員",
+    links: [
+      { label: "會員中心", href: "/dashboard/membership", icon: Crown },
+      { label: "訂閱方案", href: "/dashboard/subscription", icon: CreditCard },
+      { label: "用量與點數紀錄", href: "/dashboard/membership/usage", icon: Gauge },
+      { label: "付款與發票", href: "/dashboard/membership/billing", icon: Receipt },
+    ],
+  },
+];
 
+const MENU_LINKS = [
+  { label: "會員中心", href: "/dashboard/membership" },
+  { label: "訂閱方案", href: "/dashboard/subscription" },
+  { label: "用量與點數紀錄", href: "/dashboard/membership/usage" },
+  { label: "付款與發票", href: "/dashboard/membership/billing" },
+  { label: "帳戶設定", href: "/dashboard/account" },
 ];
 
 export default function Sidebar() {
   const pathname = usePathname();
+  const [user, setUser] = useState<{ name?: string; avatar?: string; plan?: string; aiPoints?: string }>({});
+  const [menuOpen, setMenuOpen] = useState(false);
 
-  const isActive = (href: string) => {
-    if (href === "/dashboard") return pathname === "/dashboard";
-    return pathname.startsWith(href);
+  useEffect(() => {
+    api.getUser()
+      .then((u) =>
+        setUser({
+          name: u?.name,
+          avatar: u?.avatar,
+          plan: u?.chosenPlan ? `${u.chosenPlan} · 原方案` : "Free · 原方案",
+          aiPoints: u?.aiPoints ?? "—",
+        })
+      )
+      .catch(() => {});
+  }, []);
+
+  // Close the account popover whenever the route changes.
+  useEffect(() => setMenuOpen(false), [pathname]);
+
+  const isActive = (href: string) => pathname === href || pathname.startsWith(`${href}/`);
+
+  const logout = async () => {
+    await fetch("/api/auth/logout", { method: "POST" });
+    window.location.href = "/";
   };
 
   return (
-    <aside className="sticky top-[59px] flex h-[calc(100vh-59px)] max-h-[calc(100vh-59px)] flex-col items-stretch gap-[14px] overflow-y-auto border-r border-[var(--ic-hairline)] bg-[var(--ic-surface-2)] px-3 py-[18px] overscroll-contain" style={{ scrollbarGutter: "stable" }}>
-      <div className="rounded-[var(--ic-radius-md)] border border-transparent bg-transparent px-3 pb-3 pt-[10px]">
-        <h2 className="text-[17px] font-[600] text-[var(--ic-ink)]">創作者控制中心</h2>
-        <p className="mt-1 text-[12px] leading-[1.55] text-[var(--ic-ink-subtle)]">管理你的直播工具與疊加層設定</p>
+    <>
+      <div className="member-sidebar-scroll">
+        {SECTIONS.map((section) => (
+          <section className="sidebar-section" key={section.title}>
+            <p className="sidebar-section-title">
+              <span className="sidebar-section-dot" aria-hidden="true" />
+              {section.title}
+            </p>
+            <div className="sidebar-link-list">
+              {section.links.map((link) => {
+                const active = isActive(link.href);
+                const Icon = link.icon;
+                return (
+                  <Link
+                    key={link.href}
+                    href={link.href}
+                    data-link=""
+                    className={`sidebar-link${active ? " is-active" : ""}`}
+                    aria-current={active ? "page" : undefined}
+                  >
+                    <span className="sidebar-link-icon" aria-hidden="true">
+                      <Icon size={18} strokeWidth={2.15} />
+                    </span>
+                    <span className="sidebar-link-label">{link.label}</span>
+                  </Link>
+                );
+              })}
+            </div>
+          </section>
+        ))}
       </div>
 
-      {sidebarSections.map((section) => (
-        <div key={section.title} className="flex w-full min-w-0 flex-col gap-[6px] rounded-[var(--ic-radius-md)] border border-transparent bg-transparent p-1">
-          <div className="px-2 pb-[5px] pt-2 text-[11px] font-[600] tracking-[0.08em] text-[var(--ic-ink-tertiary)]">
-            {section.title}
-          </div>
-          <div className="grid min-w-0 gap-[3px]">
-            {section.links.map((link) => {
-              const active = isActive(link.href);
-              const Icon = link.icon;
-              return (
-                <Link key={link.href} href={link.href}
-                  className={`flex min-h-[38px] w-full min-w-0 items-center gap-[10px] rounded-[var(--ic-radius-md)] border border-transparent px-[10px] py-[9px] text-[13px] font-[500] no-underline transition-all ${
-                    active
-                      ? "border-[var(--ic-hairline-strong)] bg-[var(--ic-surface-1)] text-[var(--ic-ink)] shadow-[0_1px_2px_rgba(17,17,17,.08)]"
-                      : "text-[var(--ic-ink-subtle)] hover:border-[var(--ic-hairline)] hover:bg-[var(--ic-surface-1)] hover:text-[var(--ic-ink-muted)]"
-                  }`}
-                >
-                  <Icon className={`h-[18px] w-[18px] flex-shrink-0 ${active ? "text-[var(--ic-fin-orange)]" : "text-[var(--ic-ink-tertiary)]"}`} />
-                  <span className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">{link.label}</span>
-                </Link>
-              );
-            })}
-          </div>
+      <div className="member-account">
+        <div id="member-account-menu" className="member-account-menu" hidden={!menuOpen}>
+          <p>帳戶與會員</p>
+          <nav aria-label="帳戶與會員">
+            {MENU_LINKS.map((l) => (
+              <Link key={l.href} href={l.href} data-link="">
+                {l.label}
+              </Link>
+            ))}
+            <button type="button" onClick={logout}>
+              登出
+            </button>
+          </nav>
         </div>
-      ))}
-    </aside>
+
+        <button
+          type="button"
+          className="member-account-trigger"
+          onClick={() => setMenuOpen((v) => !v)}
+          aria-expanded={menuOpen}
+          aria-controls="member-account-menu"
+          aria-label={menuOpen ? "關閉帳戶與會員選單" : "開啟帳戶與會員選單"}
+        >
+          <span className="member-account-identity">
+            <span className="member-avatar" aria-hidden="true">
+              {user.avatar ? <img src={user.avatar} alt="" /> : user.name?.charAt(0) || "?"}
+            </span>
+            <span>
+              <strong>{user.name || "未登入"}</strong>
+              <small>{user.plan || "Free · 原方案"}</small>
+            </span>
+            <span className="member-chevron" aria-hidden="true">
+              ⌃
+            </span>
+          </span>
+          <span className="member-points-ribbon">
+            <span>✧ AI 點數</span>
+            <span>
+              <strong>{user.aiPoints ?? "—"}</strong>
+            </span>
+          </span>
+          <small className="member-expiry">新制點數尚未啟用</small>
+        </button>
+      </div>
+    </>
   );
 }

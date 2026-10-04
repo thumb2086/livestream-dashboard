@@ -6,38 +6,23 @@ export async function GET(_req: Request, { params }: { params: Promise<{ token: 
   try {
     const { token } = await params;
     const source = await prisma.oBSSource.findFirst({
-      where: { token, sourceKey: "alerts" },
+      where: { token, sourceKey: "donation-alert" },
       include: { user: true },
     });
     if (!source || !source.enabled) return new Response("Not Found", { status: 404 });
     const demoMode = source.user.demoMode;
+    console.error("Alerts overlay demoMode:", demoMode);
 
-    // Fetch real confirmed donations
-    const recentDonations = await prisma.zixiDonation.findMany({
-      where: { userId: source.user.id, status: "confirmed" },
-      orderBy: { createdAt: "desc" },
-      take: 10,
-    });
-
-    const donationsJson = JSON.stringify(recentDonations.map(d => ({
-      name: d.donorAddress ? `${d.donorAddress.slice(0,4)}...${d.donorAddress.slice(-4)}` : "匿名",
-      amount: d.amount,
-      token: d.token,
-      msg: d.message || "感謝贊助！",
-    })));
-
-    const obsToken = token;
     const html = `<!DOCTYPE html>
 <html style="margin:0;background:transparent;overflow:hidden">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
 <body style="margin:0;font-family:system-ui,sans-serif">
 <div id="alert-container" style="position:fixed;top:80px;left:50%;transform:translateX(-50%);width:90%;max-width:500px;display:flex;flex-direction:column;align-items:center;gap:12px"></div>
 <script>
-(function(){ var container=document.getElementById('alert-container'), idx=0;
-  var donations=${donationsJson};
-  var demoMode=${demoMode};
-  var obsToken="${obsToken}";
-  var apiBase=window.location.origin;
+(function(){ var container=document.getElementById('alert-container');
+  var apiBase=window.location.origin, obsToken="${token}";
+  var lastTime=localStorage.getItem('sf_alerts_last')||'';
+
   function showAlert(a){
     var el=document.createElement('div');
     el.style.cssText='display:flex;align-items:center;gap:14px;background:rgba(0,0,0,0.85);border-radius:16px;padding:16px 24px;min-width:320px;transform:translateY(20px);opacity:0;transition:all 0.5s ease;border:1px solid rgba(255,86,0,0.3)';
@@ -46,21 +31,36 @@ export async function GET(_req: Request, { params }: { params: Promise<{ token: 
     requestAnimationFrame(function(){el.style.transform='translateY(0)';el.style.opacity='1'});
     setTimeout(function(){el.style.transform='translateY(-10px)';el.style.opacity='0';setTimeout(function(){el.remove()},500)},4000);
   }
-  // Show real donations first
-  function showNext(){ if(idx<donations.length){ showAlert(donations[idx]); idx++; } }
-  showNext();
-  setInterval(function(){
+
+  // On first load: record latest timestamp, NEVER show old donations
+  function init(){
     fetch(apiBase+'/api/v1/zixi-donations?status=confirmed&token='+obsToken)
       .then(function(r){return r.json()}).then(function(d){
-        if(d.donations&&d.donations.length>donations.length){
-          for(var i=donations.length;i<d.donations.length;i++){
-            var dd=d.donations[i];
-            showAlert({name:dd.donorAddress?dd.donorAddress.slice(0,4)+'...'+dd.donorAddress.slice(-4):'匿名',amount:dd.amount,token:dd.token,msg:dd.message||'感謝贊助！'});
-          }
-          donations=d.donations;
+        if(d.donations&&d.donations.length>0){
+          var latest=d.donations[0];
+          var t=latest.createdAt||'';
+          if(t>lastTime){lastTime=t;localStorage.setItem('sf_alerts_last',t);}
         }
       }).catch(function(){});
-  },15000);
+  }
+  init();
+
+  // Poll for NEW donations only (after lastTime)
+  setInterval(function(){
+    var url=apiBase+'/api/v1/zixi-donations?status=confirmed&token='+obsToken;
+    if(lastTime) url+='&after='+encodeURIComponent(lastTime);
+    fetch(url).then(function(r){return r.json()}).then(function(d){
+      if(d.donations) for(var i=0;i<d.donations.length;i++){
+        var dd=d.donations[i];
+        var t=dd.createdAt||'';
+        if(t<=lastTime) continue;
+        var donorName=dd.donorName||(dd.donorAddress?dd.donorAddress.slice(0,4)+'...'+dd.donorAddress.slice(-4):'匿名');
+        showAlert({name:donorName,amount:dd.amount,token:dd.token,msg:dd.message||'感謝贊助！'});
+        if(t>lastTime){lastTime=t;localStorage.setItem('sf_alerts_last',t);}
+      }
+    }).catch(function(){});
+  },30000);
+
   ${demoMode ? `
   var samples=[{name:"小美",amount:300,token:"ZXC",msg:"加油！最喜歡你的台了 💖"},{name:"匿名贊助",amount:1000,token:"ZXC",msg:"繼續努力！"},{name:"直播迷",amount:200,token:"ZXC",msg:"好看！"}];
   setTimeout(function(){setInterval(function(){showAlert(samples[Math.floor(Math.random()*samples.length)]);},7000);},5000);` : ''}

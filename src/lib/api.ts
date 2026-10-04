@@ -42,4 +42,14 @@ export const api = {
 
   getOnboard: () => req<any>("/onboard"),
   saveOnboard: (data: any) => req<any>("/onboard", { method: "POST", body: JSON.stringify(data) }),
+
+  zixiProxy: (data: any) => req<any>("/zixi/proxy", { method: "POST", body: JSON.stringify(data) }),
+  zixiCheckTx: () => req<any>("/zixi/check-tx", { method: "POST" }),
+  getZixiDonations: () => req<any>("/zixi-donations"),
+
+  getCommands: () => req<{ commands: any[] }>("/commands"),
+  addCommand: (data: any) => req<{ commands: any[] }>("/commands", { method: "POST", body: JSON.stringify({ _meta: "add", ...data }) }),
+  updateCommand: (data: any) => req<{ commands: any[] }>("/commands", { method: "POST", body: JSON.stringify({ _meta: "update", ...data }) }),
+  toggleCommand: (id: string, enabled: boolean) => req<{ commands: any[] }>("/commands", { method: "POST", body: JSON.stringify({ _meta: "toggle", id, enabled }) }),
+  deleteCommand: (id: string) => req<{ commands: any[] }>("/commands", { method: "POST", body: JSON.stringify({ _meta: "delete", id }) }),
 };

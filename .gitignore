@@ -32,6 +32,8 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+# ...but the template belongs in the repo, or nobody knows which vars exist.
+!.env.example
 
 # vercel
 .vercel
@@ -45,3 +47,13 @@ next-env.d.ts
 .env
 *.db
 prisma/dev.db
+
+TECH-STACK.md
+
+# Build chunks dumped at the repo root while inspecting the bundle.
+temp_*.js
+temp_*.txt
+temp/
+
+# Local agent notes
+.opencode/

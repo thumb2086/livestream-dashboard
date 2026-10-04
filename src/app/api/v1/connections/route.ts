@@ -36,17 +36,22 @@ export async function GET(req: Request) {
     const conns = await prisma.platformConnection.findMany({ where: { userId: user.id } });
     for (const conn of conns) {
       if (conn.connected && (!conn.channelName || !conn.channelAvatar) && conn.accessToken) {
-        const info = await refreshChannelInfo(conn.platform, conn.accessToken, process.env.TWITCH_CLIENT_ID);
-        if (info) {
-          await prisma.platformConnection.update({ where: { id: conn.id }, data: { channelId: info.channelId, channelName: info.channelName, channelAvatar: info.channelAvatar } });
-          conn.channelName = info.channelName || conn.channelName;
-          conn.channelAvatar = info.channelAvatar || conn.channelAvatar;
-          const updateUser: any = {};
-          if (info.channelName) updateUser.name = info.channelName;
-          if (info.channelHandle) { const h = info.channelHandle.toLowerCase().replace(/[^a-z0-9]/g, ""); if (h) updateUser.username = h; }
-          if (info.channelAvatar && !user.avatar) updateUser.avatar = info.channelAvatar;
-          if (Object.keys(updateUser).length) await prisma.user.update({ where: { id: user.id }, data: updateUser });
-        }
+        try {
+          const info = await Promise.race([
+            refreshChannelInfo(conn.platform, conn.accessToken, process.env.TWITCH_CLIENT_ID),
+            new Promise<null>(resolve => setTimeout(() => resolve(null), 3000)),
+          ]);
+          if (info) {
+            await prisma.platformConnection.update({ where: { id: conn.id }, data: { channelId: info.channelId, channelName: info.channelName, channelAvatar: info.channelAvatar } });
+            conn.channelName = info.channelName || conn.channelName;
+            conn.channelAvatar = info.channelAvatar || conn.channelAvatar;
+            const updateUser: any = {};
+            if (info.channelName) updateUser.name = info.channelName;
+            if (info.channelHandle) { const h = info.channelHandle.toLowerCase().replace(/[^a-z0-9]/g, ""); if (h) updateUser.username = h; }
+            if (info.channelAvatar && !user.avatar) updateUser.avatar = info.channelAvatar;
+            if (Object.keys(updateUser).length) await prisma.user.update({ where: { id: user.id }, data: updateUser });
+          }
+        } catch { /* skip slow refresh */ }
       }
     }
     const result: Record<string, any> = {};

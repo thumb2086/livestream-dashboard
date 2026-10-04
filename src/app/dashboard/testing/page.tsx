@@ -33,8 +33,8 @@ export default function TestingPage() {
   const toggleAutoMode = async () => {
     const next = !autoMode;
     setAutoMode(next);
-    document.querySelectorAll('iframe[src*="/overlay/"]').forEach(el => { if (el instanceof HTMLIFrameElement) el.src = el.src; });
     await api.updateUser({ demoMode: next }).catch(() => {});
+    document.querySelectorAll('iframe[src*="/overlay/"]').forEach(el => { if (el instanceof HTMLIFrameElement) el.src = el.src; });
   };
 
   useEffect(() => {
@@ -42,12 +42,15 @@ export default function TestingPage() {
       intervalRef.current = setInterval(() => {
         setMessages(prev => {
           const isDonation = Math.random() > 0.7;
+          const user = chatNames[Math.floor(Math.random() * chatNames.length)];
+          const text = ["Nice!", "加油！", "哈哈哈", "讚讚", "77777", "好強喔", "LOL"][Math.floor(Math.random() * 7)];
           const newMsg: any = isDonation
             ? { type: "donation", user: "匿名贊助", text: "繼續加油！", amount: Math.floor(Math.random() * 500) + 50 }
-            : { type: "chat", user: chatNames[Math.floor(Math.random() * chatNames.length)], text: ["Nice!", "加油！", "哈哈哈", "讚讚", "77777", "好強喔", "LOL"][Math.floor(Math.random() * 7)] };
+            : { type: "chat", user, text, amount: undefined };
+          fetch("/api/v1/chat/messages", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ platform: "twitch", userName: user, message: text }) }).catch(() => {});
           return [...prev.slice(-50), newMsg];
         });
-      }, 3000);
+      }, 6000);
     } else { if (intervalRef.current) clearInterval(intervalRef.current); }
     return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
   }, [autoMode]);
@@ -66,6 +69,15 @@ export default function TestingPage() {
     const amount = parseInt(donationAmount) || 100;
     setMessages(prev => [...prev, { type: "donation", user: "測試贊助者", text: donationInput, amount }]);
     await api.simulateDonation(amount).catch(() => {});
+    // Also create a ZixiDonation record so the alerts overlay shows it
+    try {
+      const zixiRes = await fetch("/api/v1/zixi-donations", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: userData?.username || "creator", donorAddress: "0xTestDonor", amount, token: "ZXC", message: donationInput, isTest: true }),
+      });
+      if (zixiRes.ok) setError("✅ 測試斗內已送出！重整 overlay 即可看到");
+      else setError(await zixiRes.text().then(t => { try { return JSON.parse(t).error || "斗內記錄失敗"; } catch { return "斗內記錄失敗"; } }));
+    } catch { setError("⚠️ 伺服器連線失敗，請重整後重試"); }
     setDonationInput("");
   };
 
@@ -138,6 +150,7 @@ export default function TestingPage() {
             <div className="mt-2 grid gap-2.5">
               {[
                 { label: "聊天室疊加層", key: "chat" },
+                { label: "字幕疊加層", key: "subtitles" },
                 { label: "斗內進度條", key: "donations" },
                 { label: "斗內通知", key: "alerts" },
                 { label: "頻道統計", key: "stats" },
@@ -159,7 +172,7 @@ export default function TestingPage() {
           <span className="text-[12px] font-[500] uppercase tracking-[0.04em] text-[var(--ic-ink-subtle)]">快速連結</span>
               {["chat", "donations", "subtitles", "alerts", "stats"].map(key => {
             const url = getUrl(key);
-            const labels: Record<string, string> = { chat: "聊天室", donations: "斗內進度", subtitles: "字幕", alerts: "斗內通知", stats: "統計" };
+            const labels: Record<string, string> = { chat: "聊天室", donations: "斗內進度", subtitles: "字幕疊加層", alerts: "斗內通知", stats: "統計" };
             if (!url) return null;
             return url ? (
               <a key={key} href={url} target="_blank" rel="noopener noreferrer"

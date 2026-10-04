@@ -21,6 +21,7 @@
     "tmi.js": "^1.8.5"
   },
   "devDependencies": {
+    "@swc/helpers": "^0.5.23",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",

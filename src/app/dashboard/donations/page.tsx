@@ -1,164 +1,359 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Heart, Plus, Target, Trash2, Pencil, Check, X } from "lucide-react";
 import { api } from "@/lib/api";
+import { Loading, ErrorBox } from "@/components/ui";
+import { OverlayOutput, OverlayTokenProvider } from "@/components/overlay-settings";
+
+/**
+ * Donation goal settings.
+ *
+ * Markup follows livio's `.donation-goal-*` family: a management workspace
+ * (goal list + sticky preview) and a create form, using the shared
+ * `.panel`, `.field`, `.action-row` and `.setting-switch-*` primitives the
+ * stylesheet defines for this page.
+ */
+
+type Goal = { id: string; title: string; goal: number; current: number; emoji: string };
+
+const emptyNew = { title: "", goal: 10000, emoji: "🎯" };
 
 export default function DonationsPage() {
+  return (
+    <OverlayTokenProvider overlayKey="donation-goal">
+      <DonationsInner />
+    </OverlayTokenProvider>
+  );
+}
+
+function DonationsInner() {
   const [state, setState] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState({ title: "", goal: 0, emoji: "🎯" });
   const [adding, setAdding] = useState(false);
-  const [newForm, setNewForm] = useState({ title: "", goal: 10000, emoji: "🎯" });
+  const [newForm, setNewForm] = useState(emptyNew);
   const [simAmount, setSimAmount] = useState("");
 
-  useEffect(() => { api.getDonations().then(setState).catch(() => setError("載入失敗")).finally(() => setLoading(false)); }, []);
+  const refresh = useCallback(async () => {
+    try {
+      setState(await api.getDonations());
+    } catch {
+      setError("載入失敗");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
-  const refresh = async () => { const r = await api.getDonations(); setState(r); };
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
 
-  const addGoal = async () => {
+  const guard = async (fn: () => Promise<unknown>, failMessage: string) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await fn();
+      await refresh();
+    } catch {
+      setError(failMessage);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const addGoal = () => {
     if (!newForm.title.trim() || newForm.goal <= 0) return;
-    setError(null);
-    await api.addGoal(newForm).catch((e) => { setError("新增目標失敗"); throw e; }).then(() => refresh());
-    setNewForm({ title: "", goal: 10000, emoji: "🎯" });
-    setAdding(false);
+    void guard(async () => {
+      await api.addGoal(newForm);
+      setNewForm(emptyNew);
+      setAdding(false);
+    }, "新增目標失敗");
   };
 
-  const deleteGoal = async (id: string) => { setError(null); await api.deleteGoal(id).catch(() => setError("刪除失敗")).then(() => refresh()); };
-  const startEdit = (g: any) => { setEditingId(g.id); setEditForm({ title: g.title, goal: g.goal, emoji: g.emoji }); };
-  const saveEdit = async (id: string) => {
+  const startEdit = (g: Goal) => {
+    setEditingId(g.id);
+    setEditForm({ title: g.title, goal: g.goal, emoji: g.emoji });
+  };
+
+  const saveEdit = (id: string) => {
     if (!editForm.title.trim() || editForm.goal <= 0) return;
-    setError(null);
-    await api.updateGoal({ id, ...editForm }).catch(() => setError("儲存失敗")).then(() => refresh());
-    setEditingId(null);
+    void guard(async () => {
+      await api.updateGoal({ id, ...editForm });
+      setEditingId(null);
+    }, "儲存失敗");
   };
 
-  const simulateDonation = async () => {
-    const amount = parseInt(simAmount);
-    if (isNaN(amount) || amount <= 0) return;
-    setError(null);
-    await api.simulateDonation(amount).catch(() => setError("模擬失敗")).then(() => refresh());
-    setSimAmount("");
+  const simulate = () => {
+    const amount = parseInt(simAmount, 10);
+    if (!Number.isFinite(amount) || amount <= 0) return;
+    void guard(async () => {
+      await api.simulateDonation(amount);
+      setSimAmount("");
+    }, "模擬斗內失敗");
   };
 
-  const updateMeta = async (partial: any) => {
+  const updateMeta = (partial: Record<string, unknown>) => {
     const merged = { ...state, ...partial };
     setState(merged);
-    await api.updateDonationMeta(merged).catch(() => setError("儲存失敗"));
+    void api.updateDonationMeta(merged).catch(() => setError("儲存失敗"));
   };
 
-  if (loading) return <div className="p-8 text-center text-[var(--ic-ink-muted)]">載入中...</div>;
+  if (loading) return <Loading />;
+
+  const goals: Goal[] = state?.goals ?? [];
+  const totalReceived = state?.totalReceived ?? 0;
+  const donorCount = state?.donorCount ?? 0;
 
   return (
-    <div className="max-w-[1080px]">
-      <div className="mb-4 text-[13px] text-[var(--ic-ink-subtle)]">
-        <a href="/dashboard" className="text-[var(--ic-primary)] no-underline">控制中心</a>
-        <span className="mx-2 text-[var(--ic-ink-muted)]">/</span>
-        <span className="text-[var(--ic-ink-muted)]">斗內進度</span>
+    <div className="stack donation-goal-settings-stack">
+      <div className="panel-head">
+        <div>
+          <div className="mini-label">目標管理</div>
+          <h2>斗內進度</h2>
+        </div>
+        <button
+          type="button"
+          className="primary-button"
+          onClick={() => setAdding((v) => !v)}
+          disabled={busy}
+        >
+          <Plus size={15} /> {adding ? "收起" : "新增目標"}
+        </button>
       </div>
-      <div className="mb-6 grid gap-2">
-        <h1 className="text-[34px] font-[500] leading-[1.12] text-[var(--ic-ink)]">斗內進度</h1>
-        <p className="max-w-[520px] text-[14px] leading-[1.6] text-[var(--ic-ink-muted)]">設定斗內目標與進度條，在直播中即時顯示贊助進度。</p>
-      </div>
-      {error && <div className="mb-4 rounded-[var(--ic-radius-md)] border border-red-200 bg-red-50 p-3 text-[13px] text-red-600">{error}</div>}
-      <div className="grid grid-cols-[1fr_290px] gap-6 items-start max-lg:grid-cols-1">
-        <div className="grid gap-3.5 rounded-[var(--ic-radius-lg)] border border-[var(--ic-hairline)] bg-[var(--ic-surface-1)] p-6">
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-[12px] font-[500] uppercase tracking-[0.04em] text-[var(--ic-ink-subtle)]">斗內目標</span>
-            {state.goals?.length > 0 && (
-              <button onClick={() => setAdding(true)} className="flex min-h-[36px] items-center gap-1.5 rounded-[var(--ic-radius-md)] border border-transparent bg-[var(--ic-primary)] px-3.5 text-[13px] font-[500] text-white"><Plus className="h-4 w-4" /> 新增目標</button>
-            )}
+
+      {error && <ErrorBox message={error} />}
+
+      {adding && (
+        <div className="donation-goal-create-form">
+          <div className="donation-goal-create-head">
+            <strong>新增斗內目標</strong>
+            <button type="button" className="ghost-button" onClick={() => setAdding(false)} aria-label="關閉">
+              <X size={15} />
+            </button>
           </div>
-          {adding && (
-            <div className="rounded-[var(--ic-radius-md)] border border-[var(--ic-hairline)] bg-[var(--ic-surface-2)] p-4">
-              <div className="mb-3 grid grid-cols-2 gap-3">
-                <div className="grid gap-1">
-                  <span className="text-[12px] font-[500] text-[var(--ic-ink-muted)]">目標名稱</span>
-                  <input value={newForm.title} onChange={e => setNewForm(f => ({ ...f, title: e.target.value }))} placeholder="例如：新麥克風基金" className="rounded-[var(--ic-radius-md)] border border-[var(--ic-hairline)] bg-[var(--ic-surface-1)] px-3 py-2.5 text-[14px] text-[var(--ic-ink)] outline-none" />
-                </div>
-                <div className="grid gap-1">
-                  <span className="text-[12px] font-[500] text-[var(--ic-ink-muted)]">目標金額</span>
-                  <input type="number" value={newForm.goal} onChange={e => setNewForm(f => ({ ...f, goal: parseInt(e.target.value) || 0 }))} className="rounded-[var(--ic-radius-md)] border border-[var(--ic-hairline)] bg-[var(--ic-surface-1)] px-3 py-2.5 text-[14px] text-[var(--ic-ink)] outline-none" />
-                </div>
-              </div>
-              <div className="flex gap-2">
-                <button onClick={addGoal} className="flex min-h-[36px] items-center gap-1.5 rounded-[var(--ic-radius-md)] border border-transparent bg-[var(--ic-primary)] px-3.5 text-[13px] font-[500] text-white"><Check className="h-4 w-4" /> 新增</button>
-                <button onClick={() => setAdding(false)} className="flex min-h-[36px] items-center rounded-[var(--ic-radius-md)] border border-[var(--ic-hairline)] bg-[var(--ic-surface-1)] px-3.5 text-[13px] font-[500] text-[var(--ic-ink)]"><X className="h-4 w-4" /></button>
+          <div className="donation-goal-create-grid form-grid">
+            <label className="field">
+              <span>目標名稱</span>
+              <input
+                value={newForm.title}
+                onChange={(e) => setNewForm((f) => ({ ...f, title: e.target.value }))}
+                placeholder="例如：新麥克風基金"
+              />
+            </label>
+            <label className="field">
+              <span>目標金額 (ZXC)</span>
+              <input
+                type="number"
+                value={newForm.goal}
+                onChange={(e) => setNewForm((f) => ({ ...f, goal: parseInt(e.target.value, 10) || 0 }))}
+              />
+            </label>
+          </div>
+          <div className="action-row">
+            <button type="button" className="primary-button" onClick={addGoal} disabled={busy || !newForm.title.trim()}>
+              <Check size={15} /> 建立目標
+            </button>
+            <span className="settings-note">目標建立後會立刻出現在 OBS 疊加層可選項目中。</span>
+          </div>
+        </div>
+      )}
+
+      <div className="donation-goal-management-workspace">
+        {/* ---------------------------------------------- goal list */}
+        <div className="stack">
+          <div className="panel">
+            <div className="donation-goal-panel-head">
+              <div>
+                <div className="mini-label">斗內目標</div>
+                <h2>{goals.length ? `${goals.length} 個目標` : "尚無目標"}</h2>
               </div>
             </div>
-          )}
-          <div className="grid gap-3">
-            {(!state.goals || state.goals.length === 0) && !adding && (
-              <div className="flex flex-col items-center gap-3 py-8 text-center">
-                <Heart className="h-8 w-8 text-[var(--ic-ink-tertiary)]" />
-                <p className="text-[14px] text-[var(--ic-ink-muted)]">尚無斗內目標</p>
-                <button onClick={() => setAdding(true)} className="flex min-h-[36px] items-center gap-1.5 rounded-[var(--ic-radius-md)] border border-transparent bg-[var(--ic-primary)] px-3.5 text-[13px] font-[500] text-white"><Plus className="h-4 w-4" /> 新增第一個目標</button>
+
+            {goals.length === 0 ? (
+              <div className="commerce-admin-empty">
+                <h2>還沒有斗內目標</h2>
+                <p>按右上角「新增目標」建立第一個。</p>
+              </div>
+            ) : (
+              <div className="donation-goal-management-list">
+                {goals.map((g) => {
+                  const pct = g.goal > 0 ? Math.min(100, Math.round((g.current / g.goal) * 100)) : 0;
+                  return (
+                    <div key={g.id} className="donation-goal-target-row">
+                      {editingId === g.id ? (
+                        <div className="donation-goal-create-grid form-grid">
+                          <label className="field">
+                            <span>名稱</span>
+                            <input value={editForm.title} onChange={(e) => setEditForm((f) => ({ ...f, title: e.target.value }))} />
+                          </label>
+                          <label className="field">
+                            <span>目標金額</span>
+                            <input
+                              type="number"
+                              value={editForm.goal}
+                              onChange={(e) => setEditForm((f) => ({ ...f, goal: parseInt(e.target.value, 10) || 0 }))}
+                            />
+                          </label>
+                          <div className="action-row commerce-admin-wide">
+                            <button type="button" className="primary-button" onClick={() => saveEdit(g.id)} disabled={busy}>
+                              <Check size={14} /> 儲存
+                            </button>
+                            <button type="button" className="ghost-button" onClick={() => setEditingId(null)}>
+                              取消
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          <span className="donation-goal-target-main">
+                            <strong>
+                              {g.emoji} {g.title}
+                            </strong>
+                            <span className="donation-goal-target-meta">
+                              <span>ZXC {g.current.toLocaleString()}</span>
+                              <span>目標 ZXC {g.goal.toLocaleString()}</span>
+                            </span>
+                            <span className="donation-goal-target-progress">
+                              <span style={{ width: `${pct}%` }} />
+                            </span>
+                          </span>
+                          <span className="action-row donation-goal-target-actions">
+                            <span className={`commerce-admin-status ${pct >= 100 ? "status-active" : "status-archived"}`}>
+                              <Target size={13} /> {pct}%
+                            </span>
+                            <button
+                              type="button"
+                              className="donation-goal-target-action is-edit"
+                              onClick={() => startEdit(g)}
+                              disabled={busy}
+                            >
+                              <Pencil size={14} /> 編輯
+                            </button>
+                            <button
+                              type="button"
+                              className="donation-goal-target-action is-delete"
+                              onClick={() => void guard(() => api.deleteGoal(g.id), "刪除失敗")}
+                              disabled={busy}
+                            >
+                              <Trash2 size={14} /> 刪除
+                            </button>
+                          </span>
+                        </>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             )}
-            {state.goals?.map((g: any) => {
-              const pct = Math.min(100, Math.round((g.current / g.goal) * 100));
-              return (
-                <div key={g.id} className="rounded-[var(--ic-radius-md)] border border-[var(--ic-hairline)] bg-[var(--ic-surface-1)] p-4">
-                  {editingId === g.id ? (
-                    <div className="mb-3 grid grid-cols-2 gap-3">
-                      <div className="grid gap-1"><span className="text-[12px] font-[500] text-[var(--ic-ink-muted)]">名稱</span><input value={editForm.title} onChange={e => setEditForm(f => ({ ...f, title: e.target.value }))} className="rounded-[var(--ic-radius-md)] border border-[var(--ic-hairline)] px-3 py-2 text-[13px] text-[var(--ic-ink)] outline-none" /></div>
-                      <div className="grid gap-1"><span className="text-[12px] font-[500] text-[var(--ic-ink-muted)]">目標金額</span><input type="number" value={editForm.goal} onChange={e => setEditForm(f => ({ ...f, goal: parseInt(e.target.value) || 0 }))} className="rounded-[var(--ic-radius-md)] border border-[var(--ic-hairline)] px-3 py-2 text-[13px] text-[var(--ic-ink)] outline-none" /></div>
-                      <div className="col-span-2 flex gap-2">
-                        <button onClick={() => saveEdit(g.id)} className="flex items-center gap-1 rounded-[var(--ic-radius-md)] border border-transparent bg-[var(--ic-primary)] px-3 py-1.5 text-[12px] font-[500] text-white"><Check className="h-3.5 w-3.5" /> 儲存</button>
-                        <button onClick={() => setEditingId(null)} className="flex items-center rounded-[var(--ic-radius-md)] border border-[var(--ic-hairline)] px-3 py-1.5 text-[12px] font-[500] text-[var(--ic-ink)]"><X className="h-3.5 w-3.5" /></button>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="mb-3 flex items-center justify-between gap-3">
-                      <div className="flex items-center gap-2"><span className="text-lg">{g.emoji}</span><strong className="text-[15px] font-[600] text-[var(--ic-ink)]">{g.title}</strong></div>
-                      <div className="flex items-center gap-1.5">
-                        <span className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[11px] font-[500] ${pct >= 100 ? "border-[rgba(11,223,80,.32)] bg-[rgba(11,223,80,.12)] text-[#075e28]" : "border-[rgba(255,86,0,.28)] bg-[rgba(255,86,0,.1)] text-[#a53700]"}`}>
-                          <Target className="h-3 w-3" /> {pct}%
-                        </span>
-                        <button onClick={() => startEdit(g)} className="rounded p-1 text-[var(--ic-ink-tertiary)] hover:text-[var(--ic-ink)]"><Pencil className="h-3.5 w-3.5" /></button>
-                        <button onClick={() => deleteGoal(g.id)} className="rounded p-1 text-[var(--ic-ink-tertiary)] hover:text-red-500"><Trash2 className="h-3.5 w-3.5" /></button>
-                      </div>
-                    </div>
-                  )}
-                  <div className="mb-2 h-2 w-full overflow-hidden rounded-full bg-[var(--ic-surface-3)]">
-                    <div className="h-full rounded-full bg-[var(--ic-fin-orange)] transition-all duration-500" style={{ width: `${pct}%` }} />
-                  </div>
-                  <div className="flex items-center justify-between text-[13px]">
-                    <span className="font-[600] text-[var(--ic-ink)]">ZXC {g.current.toLocaleString()}</span>
-                    <span className="text-[var(--ic-ink-muted)]">目標 ZXC {g.goal.toLocaleString()}</span>
-                  </div>
-                </div>
-              );
-            })}
           </div>
-          <div className="mt-2 rounded-[var(--ic-radius-md)] border border-[var(--ic-hairline)] bg-[var(--ic-canvas)] p-4">
-            <div className="mb-2 flex items-center gap-2 text-[13px] font-[500] text-[var(--ic-ink-muted)]">
-              <Heart className="h-4 w-4" /> 模擬斗內（資料庫即時更新）
+
+          <div className="panel">
+            <div className="donation-goal-panel-head">
+              <div>
+                <div className="mini-label">測試</div>
+                <h2>模擬斗內</h2>
+              </div>
             </div>
-            <div className="flex gap-2">
-              <input type="number" value={simAmount} onChange={e => setSimAmount(e.target.value)} placeholder="輸入金額..." className="flex-1 rounded-[var(--ic-radius-md)] border border-[var(--ic-hairline)] bg-[var(--ic-surface-1)] px-3 py-2.5 text-[14px] text-[var(--ic-ink)] outline-none" />
-              <button onClick={simulateDonation} className="flex min-h-[36px] items-center gap-1.5 rounded-[var(--ic-radius-md)] border border-transparent bg-[var(--ic-fin-orange)] px-3.5 text-[13px] font-[500] text-white"><Heart className="h-4 w-4" /> 捐！</button>
+            <p className="settings-note">
+              會寫入一筆真實斗內紀錄並更新進度，用於上架前確認疊加層顯示正常。測試紀錄不會自動刪除。
+            </p>
+            <div className="action-row">
+              <input
+                type="number"
+                value={simAmount}
+                onChange={(e) => setSimAmount(e.target.value)}
+                placeholder="輸入金額…"
+                aria-label="模擬斗內金額"
+              />
+              <button type="button" className="primary-button" onClick={simulate} disabled={busy}>
+                <Heart size={15} /> 捐！
+              </button>
             </div>
           </div>
         </div>
-        <div className="sticky top-[82px] grid gap-3.5 rounded-[var(--ic-radius-lg)] border border-[var(--ic-hairline)] bg-[var(--ic-surface-1)] p-[22px]">
-          <span className="text-[12px] font-[500] uppercase tracking-[0.04em] text-[var(--ic-ink-subtle)]">統計</span>
-          <div className="flex items-center gap-2 text-[14px] font-[600] text-[var(--ic-ink)]">
-            <Heart className="h-5 w-5 text-[var(--ic-fin-orange)]" /> 本月已收到
-          </div>
-          <strong className="text-[32px] font-[700] text-[var(--ic-ink)]">ZXC {state.totalReceived?.toLocaleString() || 0}</strong>
-          <div className="text-[13px] text-[var(--ic-ink-muted)]">來自 {state.donorCount || 0} 位贊助者</div>
-          <div className="border-t border-[var(--ic-hairline-tertiary)] pt-3">
-            <span className="text-[12px] font-[500] text-[var(--ic-ink-muted)]">最低斗內金額</span>
-            <div className="mt-1 flex items-center gap-2">
-              <span className="text-[14px] text-[var(--ic-ink)]">ZXC</span>
-              <input type="number" value={state.minAmount} onChange={e => updateMeta({ minAmount: parseInt(e.target.value) || 0 })} className="w-20 rounded-[var(--ic-radius-md)] border border-[var(--ic-hairline)] px-2.5 py-1.5 text-[14px] text-[var(--ic-ink)] outline-none" />
+
+        {/* ---------------------------------------------- preview + stats */}
+        <div className="stack">
+          <div className="panel donation-goal-management-preview-panel">
+            <div className="donation-goal-panel-head">
+              <div>
+                <div className="mini-label">預覽</div>
+                <h2>進度條外觀</h2>
+              </div>
             </div>
+            <div className="donation-goal-management-preview-stage">
+              {goals.length === 0 ? (
+                <div className="commerce-admin-empty">
+                  <p>建立目標後這裡會顯示進度條外觀。</p>
+                </div>
+              ) : (
+                <GoalCapsule goal={goals[0]} />
+              )}
+            </div>
+            <p className="donation-goal-preview-percent">
+              <span>
+                {goals.length && goals[0].goal > 0
+                  ? Math.min(100, Math.round((goals[0].current / goals[0].goal) * 100))
+                  : 0}
+                %
+              </span>
+              <small>第一個目標的目前進度</small>
+            </p>
           </div>
+
+          <div className="panel">
+            <div className="donation-goal-panel-head">
+              <div>
+                <div className="mini-label">統計</div>
+                <h2>本月斗內</h2>
+              </div>
+            </div>
+            <dl className="donation-goal-amount-grid">
+              <div>
+                <dt className="mini-label">已收到</dt>
+                <dd className="mini-value">ZXC {totalReceived.toLocaleString()}</dd>
+              </div>
+              <div>
+                <dt className="mini-label">贊助者</dt>
+                <dd className="mini-value">{donorCount}</dd>
+              </div>
+              <label className="field">
+                <span>最低斗內金額</span>
+                <input
+                  type="number"
+                  value={state?.minAmount ?? 0}
+                  onChange={(e) => updateMeta({ minAmount: parseInt(e.target.value, 10) || 0 })}
+                />
+              </label>
+            </dl>
+          </div>
+
+          <OverlayOutput title="斗內進度輸出" />
         </div>
       </div>
+    </div>
+  );
+}
+
+/** Mirrors the capsule the overlay draws, driven by CSS variables. */
+function GoalCapsule({ goal }: { goal: Goal }) {
+  const pct = goal.goal > 0 ? Math.min(100, Math.round((goal.current / goal.goal) * 100)) : 0;
+  return (
+    <div
+      className="donation-goal-preview-capsule donation-goal-management-preview"
+      style={{ ["--goal-management-progress" as string]: `${pct}%` }}
+    >
+      <span className="donation-goal-preview-fill" />
+      <span className="donation-goal-preview-title">
+        {goal.emoji} {goal.title}
+      </span>
+      <span className="donation-goal-preview-amount">
+        ZXC {goal.current.toLocaleString()} / {goal.goal.toLocaleString()}
+      </span>
     </div>
   );
 }

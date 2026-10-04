@@ -1,46 +1,129 @@
 @import "tailwindcss";
 
+/*
+ * StreamFlow design tokens.
+ *
+ * Values mirror the reference creator console (livio.tw) dashboard bundle.
+ * The dashboard scope re-declares these on [data-livecore-entry="dashboard"]
+ * in dashboard.css; keeping :root in sync means the public donation page and
+ * landing page use the same palette.
+ */
 :root {
-  --ic-primary: #111111;
-  --ic-primary-hover: #2a2a2a;
-  --ic-ink: #111111;
-  --ic-ink-soft: #555;
-  --ic-ink-subtle: #6b6b6b;
-  --ic-ink-muted: #8a8a8a;
-  --ic-ink-tertiary: #b0b0b0;
+  /* Content surfaces */
+  --ic-canvas: #f8fafc;
   --ic-surface-1: #ffffff;
-  --ic-surface-2: #fafaf8;
-  --ic-surface-3: #f4f3f1;
-  --ic-surface-4: #eae8e5;
-  --ic-canvas: #f5f1ec;
-  --ic-hairline: #e5e2dd;
-  --ic-hairline-strong: #d4d0ca;
-  --ic-hairline-tertiary: #ebe7e1;
-  --ic-fin-orange: #ff5600;
-  --ic-danger: #c41c1c;
-  --ic-brand-accent: #0040ff;
-  --ic-report-blue: #3b82f6;
-  --ic-report-green: #0bbf50;
-  --ic-shadow-soft: 0 2px 8px rgba(17, 17, 17, 0.06);
-  --ic-shadow-panel: 0 8px 40px rgba(17, 17, 17, 0.1);
+  --ic-surface-2: #eef2f7;
+  --ic-surface-3: #f4f7fb;
+  --ic-surface-4: #dbe3ee;
+  --ic-surface-dark: #0d111a;
+  --ic-surface-dark-elevated: #151c28;
+
+  /* Sidebar (dark navy) */
+  --ic-sidebar-bg: #101722;
+  --ic-sidebar-elevated: #182232;
+  --ic-sidebar-active: #232c3a;
+  --ic-sidebar-border: rgba(255, 255, 255, 0.1);
+
+  /* Hairlines */
+  --ic-hairline: #dde4ee;
+  --ic-hairline-strong: #c9d3e0;
+  --ic-hairline-tertiary: #edf1f6;
+
+  /* Ink — note muted is darker than subtle in this system */
+  --ic-ink: #0d111a;
+  --ic-ink-muted: #475569;
+  --ic-ink-subtle: #64748b;
+  --ic-ink-tertiary: #94a3b8;
+  --ic-ink-faint: #a8b3c3;
+
+  /* Primary action */
+  --ic-primary: #0d111a;
+  --ic-primary-hover: #020617;
+  --ic-primary-focus: #0f172a;
+
+  /* Accent + status */
+  --ic-brand-accent: #059669;
+  --ic-success: #059669;
+  --ic-danger: #dc2626;
+  --ic-warning: #d97706;
+
+  /* Legacy alias — the original accent token, now emerald to match the console */
+  --ic-fin-orange: #059669;
+
+  /* Report palette */
+  --ic-report-orange: #10b981;
+  --ic-report-blue: #2563eb;
+  --ic-report-green: #10b981;
+  --ic-report-pink: #e11d48;
+  --ic-report-lime: #84cc16;
+  --ic-report-cyan: #0891b2;
+
+  /* Derived semantic aliases used by the console stylesheet */
+  --bg-top: var(--ic-canvas);
+  --bg-bottom: var(--ic-canvas);
+  --panel: var(--ic-surface-1);
+  --panel-strong: var(--ic-surface-2);
+  --panel-border: var(--ic-hairline);
+  --text: var(--ic-ink);
+  --muted: var(--ic-ink-subtle);
+  --muted-strong: var(--ic-ink-muted);
+  --accent: var(--ic-primary);
+  --accent-strong: var(--ic-primary-hover);
+  --danger: var(--ic-danger);
+  --ok: var(--ic-success);
+  --warning: var(--ic-warning);
+  --announcement: var(--ic-primary-hover);
+
+  /* Radii */
+  --ic-radius-xs: 4px;
+  --ic-radius-sm: 6px;
   --ic-radius-md: 8px;
-  --ic-radius-lg: 14px;
+  --ic-radius-lg: 12px;
+  --ic-radius-xl: 16px;
+
+  /* Spacing scale */
+  --ic-space-1: 4px;
+  --ic-space-2: 8px;
+  --ic-space-3: 12px;
+  --ic-space-4: 16px;
+  --ic-space-6: 24px;
+  --ic-space-8: 32px;
+
+  /* Shadows */
+  --ic-shadow-soft: 0 14px 36px rgba(15, 23, 42, 0.08);
+  --ic-shadow-panel: 0 22px 70px rgba(15, 23, 42, 0.1);
+  --shadow: var(--ic-shadow-panel);
+  --shadow-soft: var(--ic-shadow-soft);
+
+  /* Type */
+  --ic-font-sans: "Saans", Inter, ui-sans-serif, system-ui, -apple-system,
+    BlinkMacSystemFont, "Segoe UI", "Noto Sans TC", "Microsoft JhengHei",
+    sans-serif;
 }
 
 @theme inline {
-  --font-sans: var(--font-geist-sans);
+  --font-sans: var(--ic-font-sans);
   --font-mono: var(--font-geist-mono);
 }
 
 body {
   margin: 0;
-  font-family: var(--font-sans), system-ui, sans-serif;
+  font-family: var(--ic-font-sans);
   background: var(--ic-canvas);
   color: var(--ic-ink);
+  letter-spacing: 0;
   -webkit-font-smoothing: antialiased;
 }
 
 /* Scrollbar styling */
-::-webkit-scrollbar { width: 6px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--ic-hairline-strong); border-radius: 3px; }
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--ic-hairline-strong);
+  border-radius: 3px;
+}

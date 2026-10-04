@@ -1,137 +1,295 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
-import { Terminal } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { MessagesSquare } from "lucide-react";
 import { api } from "@/lib/api";
+import { Loading, ErrorBox } from "@/components/ui";
+import {
+  OverlaySettingsPage, OverlayPreview, OverlayOutput, OverlayEditor,
+  SettingsTabs, SettingsTabPanel, SettingsCard, OverlayTokenProvider,
+} from "@/components/overlay-settings";
+
+/**
+ * Chat overlay settings.
+ *
+ * The markup deliberately mirrors the `.chat-settings-*` class family that
+ * livio's stylesheet defines (see public/css/dashboard.*.css) rather than
+ * inventing Tailwind: header -> summary -> workspace(preview | output) -> tabs
+ * -> tab panels -> cards.
+ */
+const FAMILY = "chat-settings";
+
+const TABS = [
+  { key: "basic", label: "基本" },
+  { key: "style", label: "樣式" },
+  { key: "filter", label: "過濾" },
+  { key: "account", label: "平台" },
+];
+
+const FONT_SIZE: Record<string, string> = { "小": "12px", "中": "15px", "大": "18px" };
+
+const CONNECTIONS = [
+  { key: "twitch", label: "Twitch 聊天室", note: "需要 Channel:Read:subscriptions 權限" },
+  { key: "youtube", label: "YouTube 聊天室", note: "需要 live chat 讀取權限" },
+];
 
 export default function ChatPage() {
+  return (
+    <OverlayTokenProvider overlayKey="chat">
+      <ChatInner />
+    </OverlayTokenProvider>
+  );
+}
+
+function ChatInner() {
   const [settings, setSettings] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [obsSources, setObsSources] = useState<any[]>([]);
-  const [demoMode, setDemoMode] = useState(true);
+  const [tab, setTab] = useState("basic");
+  const [connections, setConnections] = useState<Record<string, any>>({});
   const [messages, setMessages] = useState<{ user: string; text: string; color: string }[]>([]);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
-    Promise.all([api.getChat(), api.getOBS(), api.getUser()])
-      .then(([s, o, u]) => { setSettings(s); setObsSources(o.sources); if (u) setDemoMode(u.demoMode ?? false); })
-      .catch(() => setError("載入失敗"))
+    Promise.all([api.getChat(), api.getConnections()])
+      .then(([s, c]) => {
+        setSettings(s);
+        setConnections(c ?? {});
+      })
+      .catch((e) => setError(e?.message || "載入失敗"))
       .finally(() => setLoading(false));
+
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+    };
   }, []);
 
+  // The overlay iframe carries the live chat; this list only previews the
+  // styling between real messages.
   useEffect(() => {
-    if (!demoMode) return;
     setMessages([
       { user: "User1", text: "哈囉！大家好", color: "text-purple-400" },
       { user: "SuperChat", text: "太精采了！繼續加油 🎉", color: "text-orange-400" },
       { user: "User2", text: "這個主題好漂亮", color: "text-blue-400" },
     ]);
     intervalRef.current = setInterval(() => {
-      setMessages(prev => {
+      setMessages((prev) => {
         const names = ["小明", "阿花", "直播迷", "新觀眾", "老粉絲"];
-        const msgs = ["Nice!", "加油！", "哈哈哈", "讚讚", "77777", "好強喔"];
+        const texts = ["Nice!", "加油！", "哈哈哈", "讚讚", "77777", "好強喔"];
         const colors = ["text-purple-400", "text-blue-400", "text-green-400", "text-pink-400", "text-yellow-400"];
-        return [...prev.slice(-20), { user: names[Math.floor(Math.random() * names.length)], text: msgs[Math.floor(Math.random() * msgs.length)], color: colors[Math.floor(Math.random() * colors.length)] }];
+        const pick = (a: string[]) => a[Math.floor(Math.random() * a.length)];
+        return [
+          ...prev.slice(-19),
+          { user: pick(names), text: pick(texts), color: pick(colors) },
+        ];
       });
     }, 5000);
-    return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
-  }, [demoMode]);
+  }, []);
 
-  if (loading) return <div className="p-8 text-center text-[var(--ic-ink-muted)]">載入中...</div>;
-  if (error) return <div className="p-8 text-center text-red-500">{error}</div>;
+  const update = useCallback(
+    async (partial: Record<string, unknown>) => {
+      const merged = { ...settings, ...partial };
+      setSettings(merged);
+      try {
+        await api.saveChat(merged);
+      } catch {
+        setError("儲存失敗");
+      }
+    },
+    [settings]
+  );
 
-  const update = async (partial: any) => {
-    const merged = { ...settings, ...partial };
-    setSettings(merged);
-    await api.saveChat(merged).catch(() => setError("儲存失敗"));
-  };
+  if (loading) return <Loading />;
+  if (error && !settings) return <ErrorBox message={error} />;
 
-  const maxCount = parseInt((settings?.maxMessages || "50").replace(/\D/g, "")) || 50;
-  const fontSizeMap: Record<string, string> = { "小": "12px", "中": "15px", "大": "18px" };
-  const chatSource = obsSources.find((s: any) => s.sourceKey === "chat");
-  const overlayUrl = chatSource ? `${typeof window !== "undefined" ? window.location.origin : ""}/overlay/chat/${chatSource.token}` : null;
+  const maxCount = parseInt(String(settings?.maxMessages ?? "50").replace(/\D/g, "")) || 50;
+  const theme = settings?.theme ?? "dark";
+  const fontSize = FONT_SIZE[settings?.fontSize ?? "中"] ?? "15px";
+  const connectedCount = CONNECTIONS.filter((c) => connections[c.key]?.connected).length;
 
   return (
-    <div className="max-w-[1080px]">
-      <div className="mb-4 text-[13px] text-[var(--ic-ink-subtle)]">
-        <a href="/dashboard" className="text-[var(--ic-primary)] no-underline">控制中心</a>
-        <span className="mx-2 text-[var(--ic-ink-muted)]">/</span>
-        <span className="text-[var(--ic-ink-muted)]">聊天室</span>
-      </div>
-      <div className="mb-6 grid gap-2">
-        <h1 className="text-[34px] font-[500] leading-[1.12] text-[var(--ic-ink)]">聊天室疊加層</h1>
-        <p className="max-w-[520px] text-[14px] leading-[1.6] text-[var(--ic-ink-muted)]">自訂直播聊天室的顯示樣式、字型、動畫與過濾規則。</p>
-      </div>
-      <div className="grid grid-cols-[1fr_290px] gap-6 items-start max-lg:grid-cols-1">
-        <div className="grid gap-3.5 rounded-[var(--ic-radius-lg)] border border-[var(--ic-hairline)] bg-[var(--ic-surface-1)] p-6">
-          <div className="mb-1 flex items-center justify-between">
-            <span className="text-[12px] font-[500] uppercase tracking-[0.04em] text-[var(--ic-ink-subtle)]">設定</span>
-            <span className={`inline-flex items-center rounded-full border px-3 py-1 text-[11px] font-[500] ${settings.enabled ? "border-[rgba(11,223,80,.32)] bg-[rgba(11,223,80,.12)] text-[#075e28]" : "border-[var(--ic-hairline)] bg-[var(--ic-surface-3)] text-[var(--ic-ink-muted)]"}`}>
-              {settings.enabled ? "啟用中" : "已停用"}
+    <OverlaySettingsPage
+      family={FAMILY}
+      icon={<MessagesSquare size={26} />}
+      title="聊天室"
+      description="自訂直播聊天室的顯示樣式、字型與過濾規則。"
+      summary={[
+        {
+          label: "模組狀態",
+          value: (
+            <span className={settings?.enabled ? "is-enabled" : ""}>
+              {settings?.enabled ? "已啟用" : "已停用"}
             </span>
-          </div>
-          <div className="grid gap-4">
-            <div className="flex items-center justify-between gap-4 rounded-[var(--ic-radius-md)] border border-[var(--ic-hairline)] bg-[var(--ic-surface-1)] p-4">
-              <div><strong className="text-[14px] font-[600] text-[var(--ic-ink)]">啟用聊天室</strong><p className="m-0 mt-0.5 text-[13px] text-[var(--ic-ink-subtle)]">在直播中顯示聊天室疊加層</p></div>
-              <button onClick={() => update({ enabled: !settings.enabled })}
-                className={`relative h-6 w-11 flex-shrink-0 rounded-full border p-0 transition-all ${settings.enabled ? "border-[var(--ic-fin-orange)] bg-[var(--ic-fin-orange)]" : "border-[var(--ic-hairline-strong)] bg-[var(--ic-surface-4)]"}`}>
-                <span className={`absolute top-[2px] block h-[18px] w-[18px] rounded-full bg-white transition-all ${settings.enabled ? "left-[21px]" : "left-[2px]"}`} />
-              </button>
-            </div>
-            <div className="grid gap-1.5">
-              <span className="text-[12px] font-[500] text-[var(--ic-ink-muted)]">顯示主題</span>
-              <select value={settings.theme} onChange={e => update({ theme: e.target.value })}
-                className="rounded-[var(--ic-radius-md)] border border-[var(--ic-hairline)] bg-[var(--ic-surface-1)] px-3 py-2.5 text-[14px] text-[var(--ic-ink)] outline-none focus:border-[var(--ic-fin-orange)]">
-                <option value="dark">深色主題</option><option value="light">淺色主題</option><option value="transparent">透明主題</option>
-              </select>
-            </div>
-            <div className="grid gap-1.5">
-              <span className="text-[12px] font-[500] text-[var(--ic-ink-muted)]">顯示訊息數量</span>
-              <select value={settings.maxMessages} onChange={e => update({ maxMessages: e.target.value })}
-                className="rounded-[var(--ic-radius-md)] border border-[var(--ic-hairline)] bg-[var(--ic-surface-1)] px-3 py-2.5 text-[14px] text-[var(--ic-ink)] outline-none">
-                <option>最近 50 則</option><option>最近 30 則</option><option>最近 100 則</option>
-              </select>
-            </div>
-            <div className="grid gap-1.5">
-              <span className="text-[12px] font-[500] text-[var(--ic-ink-muted)]">字型大小</span>
-              <select value={settings.fontSize} onChange={e => update({ fontSize: e.target.value })}
-                className="rounded-[var(--ic-radius-md)] border border-[var(--ic-hairline)] bg-[var(--ic-surface-1)] px-3 py-2.5 text-[14px] text-[var(--ic-ink)] outline-none">
-                <option>小</option><option>中</option><option>大</option>
-              </select>
-            </div>
-          </div>
-          <div className="mt-2 rounded-[var(--ic-radius-md)] border border-[var(--ic-hairline)] bg-[var(--ic-canvas)] p-3">
-            <div className="mb-2 flex items-center gap-2 text-[13px] font-[500] text-[var(--ic-ink-muted)]">
-              <Terminal className="h-4 w-4" /> 即時預覽
-            </div>
-            <div className={`grid gap-2 rounded-[var(--ic-radius-md)] p-3 ${settings.theme === "light" ? "bg-white" : settings.theme === "transparent" ? "bg-transparent" : "bg-black/80"}`}>
+          ),
+        },
+        { label: "主題", value: theme === "light" ? "淺色" : theme === "transparent" ? "透明" : "深色" },
+        { label: "已串接平台", value: `${connectedCount} / ${CONNECTIONS.length}` },
+      ]}
+    >
+      <OverlayPreview family={FAMILY} title="整體顯示效果預覽">
+        <div className="preview-frame-shell">
+          {settings?.enabled ? (
+            <div
+              className={`preview-frame ${theme === "light" ? "bg-white" : theme === "transparent" ? "bg-transparent" : "bg-black/80"}`}
+              style={{ padding: 12, display: "grid", gap: 8, alignContent: "start" }}
+            >
               {messages.slice(-maxCount).map((m, i) => (
-                <div key={i} className="flex items-start gap-2" style={{ fontSize: fontSizeMap[settings.fontSize] || "15px" }}>
-                  <strong className={`flex-shrink-0 ${m.color}`}>{m.user}:</strong>
-                  <span className={settings.theme === "light" ? "text-gray-800" : "text-white"}>{m.text}</span>
+                <div key={i} style={{ display: "flex", gap: 6, fontSize, lineHeight: 1.4 }}>
+                  <strong className={m.color} style={{ flexShrink: 0 }}>
+                    {m.user}:
+                  </strong>
+                  <span style={{ color: theme === "light" ? "#1f2937" : "#ffffff" }}>{m.text}</span>
                 </div>
               ))}
-              {!settings.enabled && <div className="text-center text-[13px] text-[var(--ic-ink-muted)]">聊天室已停用</div>}
             </div>
-          </div>
+          ) : (
+            <div className="preview-frame preview-frame-chat-empty">
+              <p>聊天室已停用，開啟後這裡會顯示即時訊息。</p>
+            </div>
+          )}
         </div>
-        <div className="sticky top-[82px] grid gap-3.5 rounded-[var(--ic-radius-lg)] border border-[var(--ic-hairline)] bg-[var(--ic-surface-1)] p-[22px]">
-          <span className="text-[12px] font-[500] uppercase tracking-[0.04em] text-[var(--ic-ink-subtle)]">快速資訊</span>
-          <span className={`inline-flex w-fit items-center gap-1.5 rounded-full border px-3 py-1 text-[12px] font-[500] ${settings.enabled ? "border-[rgba(11,223,80,.32)] bg-[rgba(11,223,80,.12)] text-[#075e28]" : "border-[var(--ic-hairline)] bg-[var(--ic-surface-3)] text-[var(--ic-ink-muted)]"}`}>
-            狀態：{settings.enabled ? "運作中" : "已停用"}
-          </span>
-          <div className="rounded-[var(--ic-radius-md)] border border-[var(--ic-hairline)] bg-[var(--ic-surface-3)] p-3">
-            <strong className="text-[14px] text-[var(--ic-ink)]">Browser Source 網址</strong>
-            <p className="mt-1 break-all text-[13px] text-[var(--ic-ink-muted)]">
-              {settings.enabled && overlayUrl ? overlayUrl : "請先在 OBS 頁面啟用來源"}
-            </p>
-          </div>
-          <a href="/dashboard/obs" className="flex w-full items-center justify-center rounded-[var(--ic-radius-md)] border border-[var(--ic-hairline)] bg-[var(--ic-surface-1)] px-3 py-2.5 text-[13px] font-[500] text-[var(--ic-ink)] transition-all hover:border-[var(--ic-hairline-strong)] no-underline">
-            管理 OBS 來源
-          </a>
-        </div>
-      </div>
-    </div>
+      </OverlayPreview>
+
+      <OverlayOutput title="聊天室輸出" />
+
+      <OverlayEditor family={FAMILY} title="聊天室設定" hint="儲存後即時生效">
+        <form className="stack" onSubmit={(e) => e.preventDefault()}>
+          <SettingsTabs family={FAMILY} tabs={TABS} active={tab} onChange={setTab} label="聊天室設定分類" />
+
+          <SettingsTabPanel family={FAMILY} tabKey="basic" active={tab}>
+            <SettingsCard family={FAMILY} title="基本">
+              <div className="chat-settings-switch">
+                <span className="setting-switch-copy">
+                  <strong>啟用聊天室</strong>
+                  <span className="setting-switch-state">{settings?.enabled ? "開啟中" : "已關閉"}</span>
+                  <span className="settings-note">在直播畫面中顯示聊天室疊加層。</span>
+                </span>
+                <span className="setting-switch-control">
+                  <CreatorSwitch
+                    checked={!!settings?.enabled}
+                    onChange={(v) => update({ enabled: v })}
+                    label="啟用聊天室"
+                  />
+                </span>
+              </div>
+
+              <div className="chat-settings-grid">
+                <label className="field">
+                  <span>顯示主題</span>
+                  <select value={theme} onChange={(e) => update({ theme: e.target.value })}>
+                    <option value="dark">深色主題</option>
+                    <option value="light">淺色主題</option>
+                    <option value="transparent">透明主題</option>
+                  </select>
+                </label>
+                <label className="field">
+                  <span>顯示訊息數量</span>
+                  <select value={settings?.maxMessages ?? "最近 50 則"} onChange={(e) => update({ maxMessages: e.target.value })}>
+                    <option>最近 30 則</option>
+                    <option>最近 50 則</option>
+                    <option>最近 100 則</option>
+                  </select>
+                </label>
+              </div>
+            </SettingsCard>
+          </SettingsTabPanel>
+
+          <SettingsTabPanel family={FAMILY} tabKey="style" active={tab}>
+            <SettingsCard family={FAMILY} title="字體與動畫">
+              <div className="chat-settings-grid">
+                <label className="field">
+                  <span>字型大小</span>
+                  <select value={settings?.fontSize ?? "中"} onChange={(e) => update({ fontSize: e.target.value })}>
+                    <option>小</option>
+                    <option>中</option>
+                    <option>大</option>
+                  </select>
+                </label>
+                <label className="field">
+                  <span>訊息淡入時間</span>
+                  <select defaultValue="中">
+                    <option>關閉</option>
+                    <option>短</option>
+                    <option>中</option>
+                    <option>長</option>
+                  </select>
+                </label>
+              </div>
+            </SettingsCard>
+          </SettingsTabPanel>
+
+          <SettingsTabPanel family={FAMILY} tabKey="filter" active={tab}>
+            <SettingsCard family={FAMILY} title="訊息過濾">
+              <div className="chat-settings-choices">
+                {["隱藏只有表情符號", "隱藏重複訊息", "隱藏包含連結的訊息", "隱藏第一字為「/` 的指令"].map(
+                  (rule, i) => (
+                    <label key={rule} className="chat-settings-choice">
+                      <input type="checkbox" defaultChecked={i < 2} />
+                      <span>
+                        <strong>{rule}</strong>
+                      </span>
+                    </label>
+                  )
+                )}
+              </div>
+              <p className="chat-settings-info">
+                過濾只影響顯示，不會影響聊天室互動。不過濾的設定尚未串接各平台 API，目前為介面選項。
+              </p>
+            </SettingsCard>
+          </SettingsTabPanel>
+
+          <SettingsTabPanel family={FAMILY} tabKey="account" active={tab}>
+            <SettingsCard family={FAMILY} title="平台串接">
+              <div className="chat-settings-connections">
+                {CONNECTIONS.map((c) => (
+                  <div key={c.key} className="chat-settings-connection">
+                    <span>
+                      <strong>{c.label}</strong>
+                      <span className="settings-note">{connections[c.key]?.channelName ?? c.note}</span>
+                    </span>
+                    <span className={`status-pill${connections[c.key]?.connected ? " status-ok" : ""}`}>
+                      {connections[c.key]?.connected ? "已串接" : "未串接"}
+                    </span>
+                  </div>
+                ))}
+              </div>
+              <a href="/dashboard/connections">前往平台授權</a>
+            </SettingsCard>
+          </SettingsTabPanel>
+
+          <footer className="chat-settings-actions">
+            <span className="settings-note">所有設定會即時套用到疊加層</span>
+          </footer>
+        </form>
+      </OverlayEditor>
+    </OverlaySettingsPage>
+  );
+}
+
+/** Matches livio's `.setting-switch-*` markup rather than the shared Toggle. */
+function CreatorSwitch({
+  checked,
+  onChange,
+  label,
+}: {
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  label: string;
+}) {
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center" }}>
+      <input
+        className="setting-switch-input"
+        type="checkbox"
+        role="switch"
+        checked={checked}
+        aria-label={label}
+        onChange={(e) => onChange(e.target.checked)}
+        style={{ position: "absolute", opacity: 0, width: 0, height: 0 }}
+      />
+      <span className="setting-switch-track" aria-hidden="true">
+        <span className="setting-switch-thumb" />
+      </span>
+    </span>
   );
 }

@@ -118,7 +118,7 @@ export async function GET(req: NextRequest) {
   if (!user) {
     const finalHandle = (channelHandle || channelName || email?.split("@")[0] || `user_${Date.now()}`).toLowerCase().replace(/[^a-z0-9]/g, "");
     const finalName = channelName || finalHandle;
-    function rt(): string { return Math.random().toString(36).substring(2,10) + Date.now().toString(36); }
+    function rt(): string { return crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "").slice(0, 8); }
     user = await prisma.user.create({ data: { name: finalName, username: finalHandle, email: email || "", demoMode: false } });
     await Promise.all([
       prisma.chatSettings.create({ data: { userId: user.id } }),

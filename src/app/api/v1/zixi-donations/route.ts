@@ -7,26 +7,41 @@ const ZIXI_API = "https://zixi-casino-api.onrender.com/api/v1";
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    const { username, donorAddress, amount, token, message } = body;
+    const { username, donorAddress, donorName, amount, token, message } = body;
 
     if (!username || !donorAddress || !amount || amount <= 0) {
       return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
     }
 
     const user = await prisma.user.findUnique({ where: { username } });
-    if (!user || !user.zixiWallet) {
-      return NextResponse.json({ error: "Creator not found or no wallet configured" }, { status: 404 });
+    if (!user) {
+      return NextResponse.json({ error: "Creator not found" }, { status: 404 });
     }
 
-    // Record the donation (pending until verified on-chain)
+    const isTest = body.isTest === true;
+    if (isTest) {
+      // Test donations write confirmed records into alerts/leaderboard.
+      // Require the caller's session to match the target creator — otherwise
+      // anyone knowing a username can inject fake confirmed donations.
+      const caller = await getOrCreateUser(getSessionId(req));
+      if (!caller || caller.username !== user.username) {
+        return NextResponse.json({ error: "Test donations require owner session" }, { status: 403 });
+      }
+    }
+    if (!user.zixiWallet && !isTest) {
+      return NextResponse.json({ error: "No wallet configured" }, { status: 400 });
+    }
+
+    // Record the donation
     const donation = await prisma.zixiDonation.create({
       data: {
         userId: user.id,
         donorAddress,
+        donorName: donorName || "",
         amount: Number(amount),
         token: token || "ZXC",
         message: message || "",
-        status: "pending",
+        status: isTest ? "confirmed" : "pending",
       },
     });
 
@@ -36,9 +51,9 @@ export async function POST(req: Request) {
       recipientAddress: user.zixiWallet,
       instructions: `請從你的 ZIXI 錢包發送 ${amount} ${token || "ZXC"} 到 ${user.zixiWallet}`,
     });
-  } catch (e) {
+  } catch (e: any) {
     console.error("POST /api/v1/zixi-donations error:", e);
-    return NextResponse.json({ error: "Failed to create donation" }, { status: 500 });
+    return NextResponse.json({ error: "Failed to create donation", detail: e?.message || String(e) }, { status: 500 });
   }
 }
 
@@ -47,6 +62,8 @@ export async function GET(req: Request) {
     const { searchParams } = new URL(req.url);
     const status = searchParams.get("status");
     const token = searchParams.get("token");
+    const since = searchParams.get("since");
+    const after = searchParams.get("after");
 
     let userId: string | null = null;
 
@@ -63,6 +80,8 @@ export async function GET(req: Request) {
 
     const where: any = { userId };
     if (status) where.status = status;
+    if (since) where.id = { gt: since };
+    if (after) where.createdAt = { gt: new Date(after) };
 
     const donations = await prisma.zixiDonation.findMany({
       where,
