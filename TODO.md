@@ -474,6 +474,35 @@ CSS 選擇器**很多是巢狀在某個 page 家族底下**的，不是全域：
 - **會員付款**：需要 ECPay/綠界 商店代號 + Hash Key + recurring 設定。
   程式端流程已通，但正式環境仍是 `payInvoice` 直接標記已付款（任何人升級都免費）。
 
+### P0 — 配額系統沒有生產者（實測確認）
+
+**`usageEvent` 全專案只有兩處被碰到：`findMany`（讀）和 `recordUsage` action 裡的 `create`（寫，
+而那個 action 是客戶端直接呼叫的）。沒有任何程式在真實工作發生時記錄用量。**
+
+實測（`--env-file=.env` 連 Neon）：
+
+```
+usageEvent rows   : 0
+   (empty -- nothing has ever recorded usage)
+subscription rows : 1
+   - pro / pending
+```
+
+後果：
+- `quotas[].used` 永遠是 0 → `會員中心` 與 `用量與點數紀錄` 的配額條永遠 0%、永遠不會超額
+- 「近 30 天 X」趨勢永遠是 0
+- 也就是說**配額顯示與（若有）配額執行都是裝飾性的**，量不到任何東西
+
+要補的是「生產者」：字幕轉錄完成時記 `caption_minutes`、回放分析推進時記 `replay_minutes`、
+建立疊加層時記 `overlay`。這三個地方都有明確的完成時點。
+
+順帶：DB 裡那筆 `pro / pending` 證明 `effectivePlan()` 防的是真實存在的狀態，不是假想。
+
+`recordUsage` 現在沒有任何前端呼叫者（原本唯一的呼叫者就是被移除的「加一筆測試用量」按鈕）。
+**別讓它繼續開著**：它是客戶端可呼叫的寫入端點，等於讓人自己往帳務紀錄塞任意數字。
+要嘛接到真實的計量路徑上（由伺服器端呼叫，不是接受客戶端傳來的 metric/quantity），
+要嘛整個拿掉。
+
 ### P2 — 品質
 
 - ~~`useFeature` 儲存無 debounce~~ —— **這條前提是錯的，別加 debounce。**
