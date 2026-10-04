@@ -13,7 +13,7 @@ const str = (v: unknown, max: number) => (typeof v === "string" ? v.trim().slice
 export { effectivePlan };
 
 async function load(userId: string) {
-  const [subscription, usage, invoices, account] = await Promise.all([
+  const [subscription, usage, invoices, account, overlays] = await Promise.all([
     (prisma as any).subscription.findUnique({ where: { userId } }),
     (prisma as any).usageEvent.findMany({
       where: { userId },
@@ -25,6 +25,10 @@ async function load(userId: string) {
       where: { id: userId },
       select: { name: true, username: true, email: true, avatar: true },
     }),
+    // `overlay` is a concurrency ceiling, not a weekly consumption metric: an
+    // account holds N browser sources at once. Counting it from usageEvent would
+    // show 0 forever, so it is measured here instead.
+    (prisma as any).oBSSource.count({ where: { userId } }),
   ]);
 
   const planKey = effectivePlan(subscription);
@@ -56,7 +60,14 @@ async function load(userId: string) {
       email: account?.email ?? "",
       avatar: account?.avatar ?? "",
     },
-    quotas: quota.map((q) => ({ ...q, used: used[q.metric] ?? 0 })),
+    quotas: quota.map((q) => ({
+      ...q,
+      // Concurrency metrics are measured, not accumulated. See the oBSSource
+      // count above; `ai_credits` and `caption_minutes` stay summed from
+      // usageEvent because those are genuinely consumed over the period.
+      used: q.metric === "overlay" ? overlays : used[q.metric] ?? 0,
+    })),
+    overlayCount: overlays,
     periodStart: periodStart.toISOString(),
   };
 }

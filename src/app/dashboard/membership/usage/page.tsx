@@ -124,7 +124,13 @@ export default function UsagePage() {
                   </div>
 
                   {over ? (
-                    <p className="member-expiry">已超出目前方案額度</p>
+                    q.metric === "overlay" ? (
+                      /* Concurrency ceiling, not consumption: nothing is billed
+                         and nothing is disabled here. See the membership page. */
+                      <p className="member-expiry">同時層數，非用量</p>
+                    ) : (
+                      <p className="member-expiry">已超出目前方案額度</p>
+                    )
                   ) : (
                     <p className="member-expiry">
                       <TrendingUp size={12} /> 近 30 天 {(byMetric[q.metric] ?? 0).toLocaleString()} {q.unit}

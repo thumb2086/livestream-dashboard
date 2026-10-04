@@ -149,7 +149,19 @@ export default function MembershipPage() {
                     }}
                   />
                 </div>
-                {over && <p className="replay-analysis-card-error">已超出目前方案額度，請升級方案。</p>}
+                {over && q.metric === "overlay" && (
+                  /* Not a billing state. Nobody is being charged and nothing is
+                     blocked -- the catalogue simply holds more overlays than the
+                     free plan nominally allows. Say so instead of "upgrade". */
+                  <p className="member-expiry">
+                    疊加層數是「同時存在」的上限，不是用量。系統目前提供 11 種疊加層，
+                    而 {activePlan.toUpperCase()} 方案的額度是 {q.limit}。目前全部都可用，
+                    沒有因為超過數字而停用任何功能。
+                  </p>
+                )}
+                {over && q.metric !== "overlay" && (
+                  <p className="replay-analysis-card-error">已超出目前方案額度，請升級方案。</p>
+                )}
               </div>
             );
           })}

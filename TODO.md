@@ -514,19 +514,23 @@ subscription rows : 1
   問題在 fetch 沒帶到 cookie（`src/lib/captions-live.ts` 的 transcribe 呼叫），
   修法是加 `credentials: "same-origin"`（瀏覽器預設就是，但值得確認）。
 
-### `overlay` 配額語意不對，別記成用量
+### `overlay` 配額語意不對（已改成誠實顯示）
 
-`OVERLAYS` 有 **11 個**，但 free 方案的 `overlay` 上限是 **3**。
+`OVERLAYS` 有 **11 個**，free 方案的 `overlay` 上限是 **3**。
 `/api/v1/obs` 的 `listAll()` 會在第一次呼叫時**無條件建立全部 11 個** `oBSSource`，
-完全沒有 gating —— 免費使用者拿到 3.7 倍於方案額度的疊加層。
+完全沒有 gating。
 
-所以這兩件事都別做：
-1. **別把 `overlay` 記成 usage** —— 它是「同時存在的上限」，不是週期消耗量。
-   記進 `usageEvent` 會讓它變成第二種東西。
-2. **別擅自加 gating** —— 「免費使用者該拿到哪 3 個」是產品決策：
-   少給會讓另外 8 個設定頁的 `OverlayOutput` 永遠顯示「尚未產生網址」，
-   等於鎖掉現在能用的功能。要嘛調高各方案的數字（11 個全給），
-   要嘛明確做一個「免費方案可用 3 個，其餘顯示升級」的产品規則。兩者都該先問。
+`overlay` 是「同時存在的上限」，不是週期消耗量，所以**不能**記進 `usageEvent`
+（記了會讓它在配額頁變成 0/3 的假進度條）。現在改成：
+
+- membership API 直接回 `overlayCount`（`oBSSource.count`），`quotas[]` 裡
+  `overlay` 的 `used` 來源改成這個計數
+- 兩頁在 `over` 時都說明實際情況：「同時層數，非用量」、「沒有因為超過數字而停用任何功能」
+
+**沒有加 gating**，因為那是產品決策：少給會讓另外 8 個設定頁的 `OverlayOutput`
+永遠顯示「尚未產生網址」，等於鎖掉現在能用的功能。要真正收斂有兩條路，都該先問：
+1. 調高各方案的 `overlay` 數字（11 個全給，最省事）
+2. 做「免費 3 個 + 其餘顯示升級提示」的規則（要改 UI 與 OBS 建立流程）
 
 - ~~`useFeature` 儲存無 debounce~~ —— **這條前提是錯的，別加 debounce。**
   `useFeature` 的 `set()` 只改本地 state，持久化要按頁面上的「儲存設定」按鈕
