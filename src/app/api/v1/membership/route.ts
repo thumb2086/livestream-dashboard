@@ -1,25 +1,16 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getOrCreateUser, getSessionId, unauthorized } from "@/lib/getUser";
-import { PLANS, QUOTAS } from "@/lib/plans";
+import { PLANS, QUOTAS, effectivePlan } from "@/lib/plans";
 
 const str = (v: unknown, max: number) => (typeof v === "string" ? v.trim().slice(0, max) : "");
 
 /**
- * The plan whose limits may actually be applied.
- *
- * A stored planKey is a *request*, not a grant. Until a payment is settled the
- * subscription is `pending`, and an unpaid creator must stay on free limits —
- * otherwise "choose the Studio plan" is itself a free upgrade, which is how the
- * entitlement leak happened in the first place.
+ * Re-exported for `scripts/test-plan-entitlement.ts`, which imported it from here
+ * before the logic moved into src/lib/plans.ts (a lib must not import a route).
+ * Single source of truth is still one place.
  */
-export function effectivePlan(subscription: { planKey?: string; status?: string } | null | undefined): string {
-  const key = subscription?.planKey ?? "free";
-  if (key === "free") return "free";
-  const status = subscription?.status;
-  const paid = status === "active" || status === "trialing";
-  return paid && QUOTAS[key] ? key : "free";
-}
+export { effectivePlan };
 
 async function load(userId: string) {
   const [subscription, usage, invoices, account] = await Promise.all([
@@ -149,16 +140,14 @@ export async function POST(req: Request) {
         { status: 501 }
       );
     } else if (body._meta === "recordUsage") {
-      const metric = str(body.metric, 40);
-      if (!metric) return NextResponse.json({ error: "metric is required" }, { status: 400 });
-      await (prisma as any).usageEvent.create({
-        data: {
-          userId: user.id,
-          metric,
-          quantity: Math.max(1, Math.min(10000, Number(body.quantity) || 1)),
-          note: str(body.note, 120),
-        },
-      });
+      // Removed. This let a client declare its own consumption, which is how
+      // `used` stayed at 0 while the UI implied a real meter. Writes now only
+      // happen inside src/lib/usage.ts, called by code that just did the work
+      // (caption transcription, replay advance, overlay creation).
+      return NextResponse.json(
+        { error: "recordUsage is server-internal; usage is metered automatically" },
+        { status: 410 }
+      );
     } else {
       return NextResponse.json({ error: "Unknown action" }, { status: 400 });
     }

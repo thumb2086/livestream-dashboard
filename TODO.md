@@ -505,6 +505,29 @@ subscription rows : 1
 
 ### P2 — 品質
 
+- ⚠️ **部署前必須手動驗證：字幕 HTTP 轉錄路徑**
+  `/api/v1/captions/transcribe` 現在需要有效 session（過去完全無驗證，任何能連到 origin
+  的人都能燒 Groq 額度，而且不會出現在帳務頁）。**我無法在這個環境偽造有效 session，
+  所以帶 cookie 的路徑沒有端到端實測** —— `test-captions.mjs` 是直接呼叫 lib，不走 HTTP。
+  已驗證的只有：靜音路徑仍是純本地 16ms（不再付 DB 往返）、無 cookie 時回 401。
+  **驗證方式**：登入後開 `/dashboard/subtitles`，確認字幕會逐句跳出來。若沒跳出來，
+  問題在 fetch 沒帶到 cookie（`src/lib/captions-live.ts` 的 transcribe 呼叫），
+  修法是加 `credentials: "same-origin"`（瀏覽器預設就是，但值得確認）。
+
+### `overlay` 配額語意不對，別記成用量
+
+`OVERLAYS` 有 **11 個**，但 free 方案的 `overlay` 上限是 **3**。
+`/api/v1/obs` 的 `listAll()` 會在第一次呼叫時**無條件建立全部 11 個** `oBSSource`，
+完全沒有 gating —— 免費使用者拿到 3.7 倍於方案額度的疊加層。
+
+所以這兩件事都別做：
+1. **別把 `overlay` 記成 usage** —— 它是「同時存在的上限」，不是週期消耗量。
+   記進 `usageEvent` 會讓它變成第二種東西。
+2. **別擅自加 gating** —— 「免費使用者該拿到哪 3 個」是產品決策：
+   少給會讓另外 8 個設定頁的 `OverlayOutput` 永遠顯示「尚未產生網址」，
+   等於鎖掉現在能用的功能。要嘛調高各方案的數字（11 個全給），
+   要嘛明確做一個「免費方案可用 3 個，其餘顯示升級」的产品規則。兩者都該先問。
+
 - ~~`useFeature` 儲存無 debounce~~ —— **這條前提是錯的，別加 debounce。**
   `useFeature` 的 `set()` 只改本地 state，持久化要按頁面上的「儲存設定」按鈕
   （`<Btn onClick={save}>`）才會送出。沒有「每鍵一請求」的問題。

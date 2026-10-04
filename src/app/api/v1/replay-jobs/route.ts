@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getOrCreateUser, getSessionId, unauthorized } from "@/lib/getUser";
 import { advanceReplay } from "@/lib/replay-job";
+import { recordUsage } from "@/lib/usage";
 
 const str = (v: unknown, max: number) => (typeof v === "string" ? v.trim().slice(0, max) : "");
 const STATUSES = new Set(["queued", "running", "completed", "failed"]);
@@ -80,6 +81,12 @@ export async function POST(req: Request) {
             summary: result.summary,
           },
         });
+
+        // Meter the step that actually ran. advanceReplay transcribes at most
+        // SECONDS_PER_STEP (60s) of audio per call, so one step is one minute.
+        // Recorded only after a successful advance, so a failed step is not billed
+        // for work that did not finish.
+        await recordUsage(user.id, "replay_minutes", 1, "replay analysis " + job.title.slice(0, 100));
       } catch (e: any) {
         await (prisma as any).replayJob.update({
           where: { id: job.id },

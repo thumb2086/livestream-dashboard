@@ -70,3 +70,22 @@ export const QUOTAS: Record<string, Quota[]> = {
 };
 
 export const planByKey = (key: string) => PLANS.find((p) => p.key === key) ?? PLANS[0];
+
+/**
+ * The plan whose limits may actually be applied.
+ *
+ * A stored planKey is a *request*, not a grant. Until a payment is settled the
+ * subscription is `pending`, and an unpaid creator must stay on free limits --
+ * otherwise "choose the Studio plan" is itself a free upgrade, which is how the
+ * entitlement leak happened in the first place.
+ *
+ * Lives here rather than in the route handler because both the API and
+ * src/lib/usage.ts need it, and a lib must not import a route.
+ */
+export function effectivePlan(subscription: { planKey?: string; status?: string } | null | undefined): string {
+  const key = subscription?.planKey ?? "free";
+  if (key === "free") return "free";
+  const status = subscription?.status;
+  const paid = status === "active" || status === "trialing";
+  return paid && QUOTAS[key] ? key : "free";
+}

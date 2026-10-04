@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import {
   transcribePcm, pcmRms, looksLikeHallucination, groqConfigured, providerStatus, SAMPLE_RATE,
 } from "@/lib/captions-groq";
+import { getOrCreateUser, getSessionId, unauthorized } from "@/lib/getUser";
+import { checkQuota, quotaMessage, recordUsage } from "@/lib/usage";
 
 export const dynamic = "force-dynamic";
 // Audio upload + a Whisper round trip; keep well under the platform ceiling.
@@ -37,6 +39,11 @@ export async function POST(req: Request) {
     | "whisper-large-v3";
   const minRms = Number(q.get("minRms") ?? 0.006) || 0;
 
+  // NB: identity resolution deliberately happens AFTER the silence gate below.
+// This route is on the caption latency path, and a Neon round trip costs ~1.5s
+// -- more than the Whisper call itself. A skipped window spends nothing and
+// reveals nothing, so it must not pay for auth or quota lookup.
+
   let pcm: Buffer;
   try {
     const buf = Buffer.from(await req.arrayBuffer());
@@ -56,6 +63,23 @@ export async function POST(req: Request) {
     return NextResponse.json({ skipped: true, reason: "silence", windowMs, rms });
   }
 
+  // Past this point the provider gets called, so this is where the spend starts:
+  // check the granted plan's limit first, then meter what was actually decoded.
+  // Deliberately after the silence gate -- a skipped window costs nothing and
+  // must not be blocked or billed.
+  //
+  // This route spends money on every call (a Whisper round trip) and previously
+  // took no identity at all, so anyone who reached the origin could burn the
+  // Groq quota and nothing would ever appear on the billing pages.
+  const user = await getOrCreateUser(getSessionId(req));
+  if (!user) return unauthorized();
+
+  const windowSec = Math.max(1, Math.round(windowMs / 1000));
+  const quota = await checkQuota(user.id, "caption_minutes", windowSec / 60);
+  if (!quota.allowed) {
+    return NextResponse.json({ error: quotaMessage("caption_minutes", quota, " 分鐘") }, { status: 429 });
+  }
+
   try {
     const r = await transcribePcm(pcm, { model, language });
 
@@ -70,6 +94,10 @@ export async function POST(req: Request) {
       }))
       .filter((s) => !looksLikeHallucination(s.text, 0));
 
+    // Meter the audio that was actually decoded, not the caller's claim about it.
+    const billedSec = Math.max(1, Math.round(r.durationSec || windowSec));
+    await recordUsage(user.id, "caption_minutes", billedSec / 60, `Groq ${r.provider}/${model}`);
+
     return NextResponse.json({
       ok: true,
       windowMs,
@@ -79,6 +107,7 @@ export async function POST(req: Request) {
       attempts: r.attempts,
       ...(r.fellBackFrom ? { fellBackFrom: r.fellBackFrom, failReason: r.failReason } : {}),
       durationSec: r.durationSec,
+      billedSec,
       text: kept.map((s) => s.text).join(""),
       segments: kept,
     });
