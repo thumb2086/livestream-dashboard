@@ -1,31 +1,60 @@
+import { timingSafeEqual as timingSafeEqualBuf } from "node:crypto";
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { getSessionId } from "@/lib/getUser";
+import { getOrCreateUser, getSessionId, unauthorized } from "@/lib/getUser";
+
+/**
+ * ZIXI custody proxy.
+ *
+ * This route used to resolve no identity at all. It imported getSessionId but only
+ * consulted it inside getAuthHeaders, which silently fell back to the server's
+ * ZIXI_ADMIN_SESSION. That produced three live holes:
+ *
+ *   - `login` was an unauthenticated credential-forwarding oracle against the
+ *     custody API.
+ *   - `setup-admin` handed a ZIXI *admin sessionId* to any caller.
+ *   - `admin-transfer` moved real balances between two caller-supplied addresses
+ *     authorised by the server's admin session, callable from the public
+ *     /donate/[username] page with no session at all.
+ *
+ * `login` and `setup-admin` are gone: neither has a legitimate caller left, and
+ * setup-admin is an operator bootstrap task that should never be an HTTP
+ * endpoint. Everything that remains requires a session, and nothing silently
+ * borrows the admin session any more -- an explicit, reported "not connected"
+ * is what the UI should render.
+ */
 
 const ZIXI_API = process.env.ZIXI_API_URL || "https://zixi-casino-api.onrender.com/api/v1";
 
-async function getAuthHeaders(req: Request): Promise<Record<string, string>> {
-  const sessionId = getSessionId(req);
-  if (sessionId) {
-    const session = await prisma.session.findUnique({ where: { id: sessionId } });
-    if (session) {
-      const user = await prisma.user.findUnique({ where: { id: session.userId } });
-      if (user?.zixiAccessToken) {
-        const expires = user.zixiTokenExpiresAt ? new Date(user.zixiTokenExpiresAt) : null;
-        if (!expires || expires > new Date()) {
-          return { "Authorization": `Bearer ${user.zixiAccessToken}` };
-        }
-      }
-    }
-  }
-  const adminSession = process.env.ZIXI_ADMIN_SESSION;
-  if (adminSession) {
-    return { "x-session-id": adminSession };
-  }
-  return {};
+const timingSafeEqual = (a: string, b: string) =>
+  a.length === b.length && timingSafeEqualBuf(Buffer.from(a), Buffer.from(b));
+
+/**
+ * The caller's own ZIXI bearer, or null.
+ *
+ * Deliberately does NOT fall back to ZIXI_ADMIN_SESSION. That fallback is what
+ * made a public page render the operator's wallet balances as if they were the
+ * visitor's.
+ */
+async function callerToken(userId: string): Promise<string | null> {
+  const user = await (prisma as any).user.findUnique({
+    where: { id: userId },
+    select: { zixiAccessToken: true, zixiTokenExpiresAt: true },
+  });
+  const token: string | null = user?.zixiAccessToken ?? null;
+  if (!token) return null;
+  const expires = user?.zixiTokenExpiresAt ? new Date(user.zixiTokenExpiresAt) : null;
+  if (expires && expires <= new Date()) return null; // expired, not connected
+  return token;
 }
 
-async function adminAdjustBalance(address: string, amount: string, token: string, reason: string, adminSession: string) {
+async function adminAdjustBalance(
+  address: string,
+  amount: string,
+  token: string,
+  reason: string,
+  adminSession: string
+) {
   const res = await fetch(`${ZIXI_API}/admin/adjust-balance`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -36,40 +65,61 @@ async function adminAdjustBalance(address: string, amount: string, token: string
 
 export async function POST(req: Request) {
   try {
-    const body = await req.json();
-    const { action } = body;
+    const user = await getOrCreateUser(getSessionId(req));
+    if (!user) return unauthorized();
 
-    if (action === "login") {
-      const res = await fetch(`${ZIXI_API}/auth/custody/login`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username: body.username, password: body.password }),
-      });
-      const data = await res.json();
-      return NextResponse.json(data);
+    const body = await req.json();
+    const action = body?.action;
+
+    if (action === "login" || action === "setup-admin") {
+      // Removed rather than gated: both existed only to bootstrap the operator's
+      // admin session, and neither has a caller now. Bootstrapping belongs in a
+      // script, not in a route reachable by anyone.
+      return NextResponse.json(
+        { success: false, error: `${action} is not available through this endpoint` },
+        { status: 410 }
+      );
     }
 
-    if (action === "setup-admin") {
-      const res = await fetch(`${ZIXI_API}/auth/custody/login`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username: body.username, password: body.password }),
+    if (action === "wallet-summary" || action === "me") {
+      const token = await callerToken(user.id);
+      if (!token) {
+        // Say so instead of quietly returning the operator's numbers.
+        return NextResponse.json({
+          success: false,
+          connected: false,
+          error: "尚未連線或連線已過期，請重新連線 ZIXI",
+        });
+      }
+      const res = await fetch(`${ZIXI_API}${action === "me" ? "/auth/me" : "/wallet/summary"}`, {
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
       });
       const data = await res.json();
-      if (data.success && data.data?.sessionId) {
-        return NextResponse.json({ success: true, sessionId: data.data.sessionId, message: "將此 sessionId 填入 .env 的 ZIXI_ADMIN_SESSION" });
-      }
-      return NextResponse.json({ success: false, error: data.data?.error?.message || "Login failed" });
+      return NextResponse.json({ ...data, connected: true });
     }
 
     if (action === "admin-transfer") {
       const adminSession = process.env.ZIXI_ADMIN_SESSION;
-      if (!adminSession) return NextResponse.json({ success: false, error: "Admin session not configured" }, { status: 500 });
+      if (!adminSession) {
+        return NextResponse.json({ success: false, error: "Admin session not configured" }, { status: 500 });
+      }
       if (!body.donorAddress || !body.creatorAddress || !body.amount) {
         return NextResponse.json({ success: false, error: "Missing donorAddress, creatorAddress, or amount" }, { status: 400 });
       }
+
+      // The destination must be the caller's own registered wallet. Without this
+      // any signed-in account could credit an arbitrary address out of the
+      // operator's admin balance.
+      if (body.creatorAddress !== (user.zixiWallet ?? "")) {
+        return NextResponse.json(
+          { success: false, error: "creatorAddress 必須是你自己已登記的錢包" },
+          { status: 403 }
+        );
+      }
+
       const amt = String(body.amount);
       const token = body.token === "YJC" ? "yjc" : "zhixi";
-      const reason = `StreamFlow donation: ${body.donorName || "anonymous"} → ${body.creatorName || "creator"}`;
+      const reason = `StreamFlow donation: ${body.donorName || "anonymous"} → ${body.creatorName || user.username}`;
 
       const deductRes = await adminAdjustBalance(body.donorAddress, `-${amt}`, token, reason, adminSession);
       if (!deductRes.success) {
@@ -82,25 +132,10 @@ export async function POST(req: Request) {
         return NextResponse.json({ success: false, error: creditRes.data?.error?.message || "Failed to credit creator" });
       }
 
-      return NextResponse.json({ success: true, data: { message: `Transferred ${amt} ${token}`, tx: deductRes.data?.intent || creditRes.data?.intent } });
-    }
-
-    if (action === "wallet-summary") {
-      const authHeaders = await getAuthHeaders(req);
-      const res = await fetch(`${ZIXI_API}/wallet/summary`, {
-        headers: { ...authHeaders, "Content-Type": "application/json" },
+      return NextResponse.json({
+        success: true,
+        data: { message: `Transferred ${amt} ${token}`, tx: deductRes.data?.intent || creditRes.data?.intent },
       });
-      const data = await res.json();
-      return NextResponse.json(data);
-    }
-
-    if (action === "me") {
-      const authHeaders = await getAuthHeaders(req);
-      const res = await fetch(`${ZIXI_API}/auth/me`, {
-        headers: { ...authHeaders, "Content-Type": "application/json" },
-      });
-      const data = await res.json();
-      return NextResponse.json(data);
     }
 
     return NextResponse.json({ success: false, error: "Unknown action" }, { status: 400 });

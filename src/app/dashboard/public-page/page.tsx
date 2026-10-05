@@ -11,20 +11,60 @@ export default function PublicPage() {
   const [copied, setCopied] = useState(false);
 
   const [origin, setOrigin] = useState("");
+  const [live, setLive] = useState<{ connections?: any[] } | null>(null);
   useEffect(() => { setOrigin(window.location.origin); api.getUser().then(setState).catch(() => setError("載入失敗")).finally(() => setLoading(false)); }, []);
 
+  // Live signal for the preview badge. Failure is silent on purpose: an
+  // unreachable stats endpoint means "cannot tell", which must not read as
+  // "live" nor as a page-level failure.
+  useEffect(() => {
+    fetch("/api/v1/stats")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((s) => setLive(s))
+      .catch(() => setLive({ connections: [] }));
+  }, []);
+
   if (loading) return <div className="p-8 text-center text-[var(--ic-ink-muted)]">載入中...</div>;
-  if (error) return <div className="p-8 text-center text-red-500">{error}</div>;
 
   const update = async (partial: any) => {
     const merged = { ...state, ...partial };
     setState(merged);
-    await api.updateUser(partial).catch(() => setError("儲存失敗"));
+    // Clear first and only on failure. `error` used to be set-on-failure and
+    // never cleared, while the render below replaced the entire page with it --
+    // so one failed keystroke-save destroyed the page with no way back except a
+    // manual reload.
+    setError(null);
+    try {
+      await api.updateUser(partial);
+    } catch {
+      setError("儲存失敗");
+      // Roll back so the form stops showing a value the server rejected.
+      setState((prev: any) => {
+        const next = { ...prev };
+        for (const k of Object.keys(partial)) next[k] = prev[k] && typeof prev[k] === "object" ? prev[k] : state[k];
+        return next;
+      });
+    }
   };
+
+  // A failed save is a banner, not the whole page.
+  if (error && !state) return <div className="p-8 text-center text-red-500">{error}</div>;
 
   const avatarUrl = state.avatar || null;
   const previewUrl = `${origin}/@${state.username}`;
   const copyUrl = () => { navigator.clipboard.writeText(previewUrl); setCopied(true); setTimeout(() => setCopied(false), 2000); };
+
+  // Live status comes from the platform connection, not from `publicPage`.
+  // `publicPage` is a visibility switch, so keying the LIVE badge off it branded
+  // every published page as live -- and contradicted the real /[username] page,
+  // which renders an offline dot. /api/v1/stats already reports liveViewers and
+  // liveUpdatedAt per platform.
+  const liveConns = (live?.connections ?? []).filter((c: any) => (c.liveViewers ?? 0) > 0);
+  const liveLine = !state.publicPage
+    ? "🔴 頁面未公開"
+    : liveConns.length > 0
+      ? `🟢 直播中 · ${liveConns.map((c: any) => `${c.platform} ${c.liveViewers} 人`).join(" · ")}`
+      : "⚪ 目前沒有直播中";
 
   return (
     <div className="max-w-[1180px]">
@@ -57,7 +97,7 @@ export default function PublicPage() {
                 <div className="text-[13px] text-[var(--ic-ink-muted)]">@{state.username}</div>
               </div>
             </div>
-            <div className="text-[14px] text-[var(--ic-ink-subtle)]">{state.publicPage ? "🟢 直播中 · 訂閱以獲得即時通知" : "🔴 頁面未公開"}</div>
+            <div className="text-[14px] text-[var(--ic-ink-subtle)]">{liveLine}</div>
           </div>
           <div className="mb-4 grid gap-3">
             <div className="grid gap-1">

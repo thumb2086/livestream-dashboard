@@ -9,6 +9,7 @@ export default function OBSPage() {
   const [loading, setLoading] = useState(true);
   const [copied, setCopied] = useState<string | null>(null);
   const [origin, setOrigin] = useState("");
+  const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => { setOrigin(window.location.origin); api.getOBS().then(setState).finally(() => setLoading(false)); }, []);
 
@@ -19,13 +20,25 @@ export default function OBSPage() {
   };
 
   const toggle = async (id: string, enabled: boolean) => {
-    const result = await api.toggleOBS(id, enabled);
-    setState(result);
+    try {
+      setState(await api.toggleOBS(id, enabled));
+    } catch (e: any) {
+      setErr(e?.message || "切換失敗");
+    }
   };
 
+  // api.regenerateOBS posts `_meta: "regenerate"`, but the route only matches
+  // `"reissue"`, so this fell through to a 400 "Unknown action". With no catch
+  // the rejection was unhandled: the button looked live and silently did
+  // nothing. Now it reports the failure, and the message is accurate about what
+  // the button actually does.
   const regenerate = async (id: string) => {
-    const result = await api.regenerateOBS(id);
-    setState(result);
+    setErr(null);
+    try {
+      setState(await api.regenerateOBS(id));
+    } catch (e: any) {
+      setErr(e?.message || "重新產生失敗");
+    }
   };
 
   if (loading) return <div className="p-8 text-center text-[var(--ic-ink-muted)]">載入中...</div>;
@@ -43,9 +56,22 @@ export default function OBSPage() {
         <h1 className="text-[34px] font-[500] leading-[1.12] text-[var(--ic-ink)]">OBS 輸出</h1>
         <p className="max-w-[520px] text-[14px] leading-[1.6] text-[var(--ic-ink-muted)]">取得 Browser Source 網址，在 OBS 中新增來源即可顯示疊加層。</p>
       </div>
+      {err && (
+        <div className="mb-3 rounded-[var(--ic-radius-md)] border border-[var(--ic-danger)] bg-[rgba(196,28,28,.1)] px-3 py-2 text-[13px] text-[var(--ic-danger)]" role="alert">
+          {err}
+        </div>
+      )}
       <div className="grid gap-3.5">
         {sources.map((src: any) => {
-          const url = `${origin}/overlay/${src.sourceKey}/${src.token}`;
+          // The API already returns an absolute, correct `url` built from the
+          // overlay key (see api/v1/obs/route.ts). This page used to rebuild it
+          // from `src.sourceKey`, which that payload does not have -- the field
+          // is `key` -- so every URL was /overlay/undefined/<token> and all 11
+          // Browser Sources 404'd in OBS.
+          const url: string = src.url || `${origin}/overlay/${src.key}/${src.token}`;
+          if (!src.key) {
+            console.warn("[obs] source is missing `key`; the URL above may not resolve", src);
+          }
           return (
             <div key={src.id} className="rounded-[var(--ic-radius-lg)] border border-[var(--ic-hairline)] bg-[var(--ic-surface-1)] p-5">
               <div className="mb-3 flex items-center justify-between gap-3">
@@ -82,7 +108,7 @@ export default function OBSPage() {
       </div>
       <div className="mt-6 flex items-start gap-3 rounded-[var(--ic-radius-md)] border border-[rgba(196,28,28,.26)] bg-[rgba(196,28,28,.1)] p-3.5">
         <RefreshCw className="mt-0.5 h-4 w-4 flex-shrink-0 text-[var(--ic-danger)]" />
-        <div className="text-[13px] text-[var(--ic-danger)]"><strong>安全性提醒：</strong>請勿將 Browser Source 網址分享給他人。若懷疑外洩，請點擊「重新產生」更新網址。</div>
+        <div className="text-[13px] text-[var(--ic-danger)]"><strong>安全性提醒：</strong>請勿將 Browser Source 網址分享給他人。若懷疑外洩，請點擊「重新產生」更換 token，舊網址會立即失效。</div>
       </div>
     </div>
   );

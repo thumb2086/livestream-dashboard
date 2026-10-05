@@ -1,6 +1,12 @@
+import { timingSafeEqual as timingSafeEqualBuf } from "node:crypto";
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getOrCreateUser, getSessionId, unauthorized } from "@/lib/getUser";
+
+/** Constant-time compare for shared secrets. Length is checked by the caller. */
+function timingSafeEqual(a: string, b: string): boolean {
+  return timingSafeEqualBuf(Buffer.from(a), Buffer.from(b));
+}
 
 export async function POST(req: Request) {
   try {
@@ -11,8 +17,19 @@ export async function POST(req: Request) {
 
     let userId: string | null = null;
 
-    // Support both: worker (apiKey) and authenticated user (session)
-    if (body.apiKey === process.env.CHAT_WORKER_KEY && body.channelName) {
+    // Support both: worker (apiKey) and authenticated user (session).
+    const workerKey = process.env.CHAT_WORKER_KEY;
+    const presented = typeof body.apiKey === "string" ? body.apiKey : "";
+    // Fail closed. The previous test was `body.apiKey === process.env.CHAT_WORKER_KEY`,
+    // which is `undefined === undefined` -> true whenever the variable is unset and the
+    // body simply omits apiKey. That let any caller who knew a channel name post as that
+    // creator, and `__clear__` then wiped their chat history.
+    const workerAuthed =
+      Boolean(workerKey) &&
+      presented.length === workerKey!.length &&
+      timingSafeEqual(presented, workerKey!);
+
+    if (workerAuthed && body.channelName) {
       const conn = await prisma.platformConnection.findFirst({
         where: { platform: body.platform, channelName: body.channelName },
       });
@@ -24,8 +41,12 @@ export async function POST(req: Request) {
 
     if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-    // Handle clear command
+    // Destructive, so session-only: the worker key is a shared integration secret,
+    // not permission to erase someone's chat.
     if (body.message === "__clear__") {
+      if (workerAuthed) {
+        return NextResponse.json({ error: "clear is not available to the worker" }, { status: 403 });
+      }
       await prisma.chatMessage.deleteMany({ where: { userId } });
       return NextResponse.json({ ok: true, cleared: true });
     }

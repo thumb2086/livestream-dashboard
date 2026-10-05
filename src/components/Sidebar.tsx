@@ -89,19 +89,40 @@ const MENU_LINKS = [
 
 export default function Sidebar() {
   const pathname = usePathname();
-  const [user, setUser] = useState<{ name?: string; avatar?: string; plan?: string; aiPoints?: string }>({});
+  // Two sources on purpose: /api/v1/user for identity, /api/v1/membership for
+  // the plan that is actually GRANTED plus real quota.
+  //
+  // The previous version read User.chosenPlan -- a legacy column whose default is
+  // the localized string for "starter" and which nothing updates when a
+  // subscription is paid -- and read `aiPoints`, a field that does not exist on
+  // the model at all. So the ribbon always rendered its fallback and the plan
+  // label always read "<chosenPlan> · <localized legacy>".
+  const [user, setUser] = useState<{
+    name?: string;
+    avatar?: string;
+    plan?: string;
+    captionMinutes?: string;
+  }>({});
   const [menuOpen, setMenuOpen] = useState(false);
 
   useEffect(() => {
     api.getUser()
-      .then((u) =>
-        setUser({
-          name: u?.name,
-          avatar: u?.avatar,
-          plan: u?.chosenPlan ? `${u.chosenPlan} · 原方案` : "Free · 原方案",
-          aiPoints: u?.aiPoints ?? "—",
-        })
-      )
+      .then((u) => setUser((prev) => ({ ...prev, name: u?.name, avatar: u?.avatar })))
+      .catch(() => {});
+
+    fetch("/api/v1/membership")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((m) => {
+        if (!m) return;
+        const caption = (m.quotas ?? []).find((q: any) => q.metric === "caption_minutes");
+        setUser((prev) => ({
+          ...prev,
+          plan: String(m.effectivePlan ?? "free").toUpperCase(),
+          captionMinutes: caption
+            ? `${Math.round(caption.used)} / ${caption.limit.toLocaleString()}`
+            : undefined,
+        }));
+      })
       .catch(() => {});
   }, []);
 
@@ -177,16 +198,16 @@ export default function Sidebar() {
             </span>
             <span>
               <strong>{user.name || "未登入"}</strong>
-              <small>{user.plan || "Free · 原方案"}</small>
+              <small>{user.plan || "Free"}</small>
             </span>
             <span className="member-chevron" aria-hidden="true">
               ⌃
             </span>
           </span>
           <span className="member-points-ribbon">
-            <span>✧ AI 點數</span>
+            <span>字幕分鐘數</span>
             <span>
-              <strong>{user.aiPoints ?? "—"}</strong>
+              <strong>{user.captionMinutes ?? "—"}</strong>
             </span>
           </span>
           <small className="member-expiry">新制點數尚未啟用</small>
