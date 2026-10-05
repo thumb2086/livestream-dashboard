@@ -3,7 +3,7 @@
 import {
   PageHeader, Panel, Btn, Field, Input, Textarea, SelectRow, Toggle, Badge, useFeature,
 } from "@/components/ui";
-import { Users2, Copy, Check, Plus, Trash2 } from "lucide-react";
+import { Users2, Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
 
 type Room = {
@@ -61,19 +61,10 @@ const uid = () => Math.random().toString(36).slice(2, 9);
 
 export default function SharedDonationRoomsPage() {
   const { value: c, set, save, saving, saved } = useFeature<Cfg>("shared-donation-rooms", DEFAULTS);
-  const [copied, setCopied] = useState(false);
 
   const setRooms = (rooms: Room[]) => set("rooms", rooms);
   const patch = (id: string, p: Partial<Room>) => setRooms(c.rooms.map((r) => (r.id === id ? { ...r, ...p } : r)));
 
-  const copyLink = async (id: string) => {
-    const url = `https://livio.example/dashboard/shared-donation-rooms/${id}`;
-    try {
-      await navigator.clipboard.writeText(url);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1800);
-    } catch {}
-  };
 
   const addRoom = () =>
     setRooms([
@@ -138,9 +129,18 @@ export default function SharedDonationRoomsPage() {
                       />
                       <Input value={r.name} onChange={(e) => patch(r.id, { name: e.target.value })} className="min-w-[130px] flex-1 font-[600]" />
                       <Badge tone="neutral">{pct}%</Badge>
-                      <button onClick={() => copyLink(r.id)} title="複製房間連結" className="text-[var(--ic-ink-tertiary)] hover:text-[var(--ic-brand-accent)]">
-                        {copied ? <Check size={15} /> : <Copy size={15} />}
-                      </button>
+                      {/* There is no public route for a shared room -- only the
+                          /[username] page and the /overlay/* browser sources
+                          exist. The old button copied a hardcoded
+                          https://livio.example/... URL, which was someone else's
+                          brand and a guaranteed 404. Removed rather than pointed
+                          at a target that does not exist. */}
+                      <span
+                        title="尚無公開的房間連結"
+                        className="flex items-center text-[12px] text-[var(--ic-ink-tertiary)]"
+                      >
+                        無公開連結
+                      </span>
                       <button
                         onClick={() => setRooms(c.rooms.filter((x) => x.id !== r.id))}
                         title="刪除房間"

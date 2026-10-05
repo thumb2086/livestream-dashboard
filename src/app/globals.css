@@ -127,3 +127,27 @@ body {
   background: var(--ic-hairline-strong);
   border-radius: 3px;
 }
+/* ---------------------------------------------------------------------------
+ * Overlay output actions.
+ *
+ * The reference stylesheet names these .livio-output-*, which puts another
+ * product's brand into our markup. These are byte-identical rules under our own
+ * name, scoped the same way, so nothing downstream depends on their naming.
+ * Keep in sync with the .livio-output-action* block in public/css.
+ * ------------------------------------------------------------------------- */
+[data-livecore-entry=dashboard] .overlay-output-actions{display:grid;width:100%;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px;align-items:stretch}
+[data-livecore-entry=dashboard] .overlay-output-action{display:inline-flex;width:100%;min-height:40px;align-items:center;justify-content:center;margin:0;padding:7px 10px;border-radius:8px;font-size:13px;font-weight:750;line-height:1.25;text-align:center;text-decoration:none;box-shadow:0 6px 14px rgba(15,23,42,.09)}
+[data-livecore-entry=dashboard] .overlay-output-action.is-obs{grid-column:span 3;border-color:#0b1830;background:#0b1830;color:#ffffff}
+[data-livecore-entry=dashboard] .overlay-output-actions.is-obs-only .overlay-output-action.is-obs{grid-column:1/-1}
+[data-livecore-entry=dashboard] .overlay-output-action.is-obs:hover:not(:disabled){border-color:#162744;background:#162744;color:#ffffff}
+[data-livecore-entry=dashboard] .overlay-output-action.is-streamlabs{grid-column:span 3;border-color:#0f766e;background:#0f766e;color:#ffffff}
+[data-livecore-entry=dashboard] .overlay-output-action.is-streamlabs:hover:not(:disabled){border-color:#115e59;background:#115e59;color:#ffffff}
+[data-livecore-entry=dashboard] .overlay-output-action.is-test{grid-column:span 2;border-color:#079455;background:#079455;color:#ffffff;box-shadow:0 8px 18px rgba(7,148,85,.2)}
+[data-livecore-entry=dashboard] .overlay-output-action.is-test:hover:not(:disabled){border-color:#067647;background:#067647;color:#ffffff}
+[data-livecore-entry=dashboard] .overlay-output-action.is-utility{grid-column:span 2;border-color:#cbd5e1;background:#f8fafc;color:#344054;box-shadow:none}
+[data-livecore-entry=dashboard] .overlay-output-action.is-utility:hover:not(:disabled){border-color:rgba(7,148,85,.4);background:#ecfdf5;color:#047857}
+[data-livecore-entry=dashboard] .overlay-output-action.is-utility.is-danger{border-color:#fecaca;background:#fff7f7;color:#b42318}
+[data-livecore-entry=dashboard] .overlay-output-action.is-utility.is-danger:hover:not(:disabled){border-color:#fda29b;background:#fef3f2;color:#912018}
+[data-livecore-entry=dashboard] .overlay-output-action.is-create{grid-column:1/-1;border-color:#079455;background:#079455;color:#ffffff;box-shadow:0 8px 18px rgba(7,148,85,.2)}
+[data-livecore-entry=dashboard] .overlay-output-action.is-create:hover:not(:disabled){border-color:#067647;background:#067647;color:#ffffff}
+[data-livecore-entry=dashboard] .overlay-output-actions{grid-template-columns:1fr}

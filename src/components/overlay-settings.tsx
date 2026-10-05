@@ -176,7 +176,7 @@ export function OverlayOutput({ title = "OBS / Streamlabs 輸出" }: { title?: s
         <div className="output-shell output-empty">
           <p className="empty-state">{error ?? "無法建立輸出網址。"}</p>
           <div className="action-row compact-row">
-            <Btn className="livio-output-action is-create" onClick={reload}>
+            <Btn className="overlay-output-action is-create" onClick={reload}>
               重試
             </Btn>
           </div>
@@ -196,17 +196,17 @@ export function OverlayOutput({ title = "OBS / Streamlabs 輸出" }: { title?: s
             這個疊加層的輸出頁還沒實作，先建立網址可以保留設定，但貼到 OBS 暫時不會有畫面。
           </p>
         )}
-        <div className="action-row compact-row livio-output-actions">
+        <div className="action-row compact-row overlay-output-actions">
           <Btn
             variant="secondary"
-            className="livio-output-action"
+            className="overlay-output-action"
             onClick={copy}
             disabled={!source.hasRoute}
           >
             {copied ? <Check size={15} /> : <Copy size={15} />} {copied ? "已複製" : "複製網址"}
           </Btn>
           <a
-            className="ghost-link livio-output-action"
+            className="ghost-link overlay-output-action"
             href={source.url}
             target="_blank"
             rel="noreferrer"
@@ -216,7 +216,7 @@ export function OverlayOutput({ title = "OBS / Streamlabs 輸出" }: { title?: s
           </a>
           <button
             type="button"
-            className="ghost-button livio-output-action"
+            className="ghost-button overlay-output-action"
             onClick={reissue}
           >
             重新產生網址
