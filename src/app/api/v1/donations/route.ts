@@ -72,6 +72,36 @@ export async function POST(req: Request) {
     if (body._meta === "simulate") {
       const amount = Math.max(1, Math.floor(Number(body.amount)) || 0);
       if (amount <= 0) return NextResponse.json({ error: "Invalid amount" }, { status: 400 });
+
+      // Opt-in. This used to increment User.donationTotal / donationDonors --
+      // the lifetime figures the public page renders as real money received --
+      // so clicking a test button permanently inflated a visible financial
+      // total. demoMode is the creator explicitly opting in to test rows.
+      if (!user.demoMode) {
+        return NextResponse.json(
+          { error: "\u6a21\u64ec\u6597\u5165\u9700\u8981\u5148\u958b\u555f\u300c\u5c55\u793a\u6a21\u5f0f\u300d\uff0c\u5426\u5247\u6e2c\u8a66\u6703\u5beb\u5165\u516c\u958b\u9801\u986f\u793a\u7684\u6b63\u5f0f\u7d71\u8a08" },
+          { status: 403 }
+        );
+      }
+
+      // Feed the overlays, which read zixiDonation, rather than the money
+      // counters. txHash "TEST" marks the row so it can be identified and
+      // removed from the donation ledger.
+      await prisma.zixiDonation.create({
+        data: {
+          userId: user.id,
+          donorAddress: "0xTEST",
+          donorName: "測試贊助者",
+          amount,
+          token: "TWD",
+          message: "這是一筆測試紀錄，可在斗內紀錄中刪除",
+          txHash: "TEST",
+          status: "confirmed",
+        },
+      });
+
+      // The goal bar is the thing under test, so it still advances -- bounded by
+      // the goal, so it can complete it but never overshoot.
       const goals = await prisma.donationGoal.findMany({ where: { userId: user.id }, orderBy: { sortOrder: "asc" } });
       const incompleteGoal = goals.find((g: { current: number; goal: number }) => g.current < g.goal);
       if (incompleteGoal) {
@@ -80,10 +110,6 @@ export async function POST(req: Request) {
           data: { current: Math.min(incompleteGoal.current + amount, incompleteGoal.goal) },
         });
       }
-      await prisma.user.update({
-        where: { id: user.id },
-        data: { donationTotal: { increment: amount }, donationDonors: { increment: 1 } },
-      });
       return refresh(user.id);
     }
 
