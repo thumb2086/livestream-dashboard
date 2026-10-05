@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { Crown, Gauge, Receipt, CreditCard, ChevronDown, LogOut, User as UserIcon, RefreshCw } from "lucide-react";
 import { Loading, ErrorBox, useAsync } from "@/components/ui";
+import { formatPrice } from "@/lib/plans";
 
 /**
  * Membership centre.
@@ -96,7 +97,7 @@ export default function MembershipPage() {
             疊加層數、字幕分鐘數與 AI 點數都還是按 Free 計算。
             {outstanding.length > 0 && (
               <>
-                {" "}待付金額 NT$ {outstanding[0].amount.toLocaleString()}（單號 {outstanding[0].number}）。
+                {" "}待付金額 {formatPrice(outstanding[0].amount)}（單號 {outstanding[0].number}）。
               </>
             )}
           </p>
@@ -167,7 +168,7 @@ export default function MembershipPage() {
             <div className="member-memberships">
               <div>
                 <span className="member-muted">已付款單</span>
-                <strong className="member-balance">NT$ {paidTotal.toLocaleString()}</strong>
+                <strong className="member-balance">{formatPrice(paidTotal)}</strong>
                 <small className="member-muted">{paid.length} 張</small>
               </div>
               <div>
@@ -278,8 +279,8 @@ export default function MembershipPage() {
                 {invoices.map((i) => (
                   <tr key={i.id}>
                     <td>{i.number}</td>
-                    <td>NT$ {i.amount.toLocaleString()}</td>
-                    <td>NT$ {i.tax.toLocaleString()}</td>
+                    <td>{formatPrice(i.amount)}</td>
+                    <td>{formatPrice(i.tax)}</td>
                     <td>{INVOICE_STATUS[i.status] ?? i.status}</td>
                     <td>{new Date(i.issuedAt).toLocaleDateString("zh-TW")}</td>
                   </tr>

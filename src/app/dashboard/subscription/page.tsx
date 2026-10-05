@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { PLANS, QUOTAS, planByKey } from "@/lib/plans";
+import { PLANS, QUOTAS, planByKey, formatPrice } from "@/lib/plans";
 import { Check, Minus, Sparkles } from "lucide-react";
 import { Loading, ErrorBox, useAsync } from "@/components/ui";
 
@@ -75,8 +75,8 @@ export default function SubscriptionPage() {
     {
       label: "價格",
       rows: [
-        { label: "月繳", get: (k) => ({ text: planByKey(k).monthly === 0 ? "免費" : `NT$ ${planByKey(k).monthly.toLocaleString()}` }) },
-        { label: "年繳", get: (k) => ({ text: planByKey(k).yearly === 0 ? "免費" : `NT$ ${planByKey(k).yearly.toLocaleString()}` }) },
+        { label: "月繳", get: (k) => ({ text: planByKey(k).monthly === 0 ? "免費" : formatPrice(planByKey(k).monthly) }) },
+        { label: "年繳", get: (k) => ({ text: planByKey(k).yearly === 0 ? "免費" : formatPrice(planByKey(k).yearly) }) },
         { label: "可否購買", get: (k) => (planByKey(k).monthly === 0 ? { text: "可切換" } : { text: "付費未開放", unavailable: true }) },
       ],
     },
@@ -197,11 +197,11 @@ export default function SubscriptionPage() {
 
                     <div className="subscription-price-row">
                       <span className="subscription-price">
-                        {price === 0 ? "免費" : `NT$ ${price.toLocaleString()}`}
+                        {formatPrice(price)}
                       </span>
                       {mode === "yearly" && !freePlan && (
                         <span className="subscription-price-saving">
-                          省 NT$ {(p.monthly * 12 - p.yearly).toLocaleString()}
+                          省 {formatPrice(p.monthly * 12 - p.yearly)}
                         </span>
                       )}
                     </div>

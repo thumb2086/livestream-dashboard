@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { Download } from "lucide-react";
 import { Loading, ErrorBox, useAsync } from "@/components/ui";
+import { formatPrice } from "@/lib/plans";
 
 /**
  * Billing and invoices.
@@ -42,8 +43,8 @@ function downloadInvoice(inv: Invoice) {
     `發票號碼：${inv.number}`,
     `計費期間：${inv.period}`,
     `開立日期：${new Date(inv.issuedAt).toLocaleDateString("zh-TW")}`,
-    `金額：NT$ ${inv.amount.toLocaleString()}`,
-    `稅額：NT$ ${inv.tax.toLocaleString()}`,
+    `金額：${formatPrice(inv.amount)}`,
+    `稅額：${formatPrice(inv.tax)}`,
     `狀態：${STATUS_LABEL[inv.status] ?? inv.status}`,
     "",
     "本檔案由資料庫中的帳單資料產生，不是政府認可的發票。",
@@ -113,12 +114,12 @@ export default function BillingPage() {
             </section>
             <section className="member-card">
               <p className="member-plan-quota">已付款</p>
-              <p className="member-balance">NT$ {sum(paid).toLocaleString()}</p>
+              <p className="member-balance">{formatPrice(sum(paid))}</p>
               <p className="member-muted">{paid.length} 張</p>
             </section>
             <section className="member-card">
               <p className="member-plan-quota">待付款</p>
-              <p className="member-balance">NT$ {sum(pending).toLocaleString()}</p>
+              <p className="member-balance">{formatPrice(sum(pending))}</p>
               <p className="member-expiry">{pending.length ? "需處理" : "無待付款"}</p>
             </section>
           </div>
@@ -156,8 +157,8 @@ export default function BillingPage() {
                         <td>{inv.number}</td>
                         <td className="member-muted">{inv.period || "—"}</td>
                         <td>{new Date(inv.issuedAt).toLocaleDateString("zh-TW")}</td>
-                        <td>NT$ {inv.amount.toLocaleString()}</td>
-                        <td className="member-muted">NT$ {inv.tax.toLocaleString()}</td>
+                        <td>{formatPrice(inv.amount)}</td>
+                        <td className="member-muted">{formatPrice(inv.tax)}</td>
                         <td>{STATUS_LABEL[inv.status] ?? inv.status}</td>
                         <td>
                           <button

@@ -1,5 +1,24 @@
 /** Plan catalogue shared by the membership API and the dashboard pages. */
 
+/**
+ * Plans are priced in ZXC (子熙幣), not fiat.
+ *
+ * The tier *shape* is unchanged from the old NT$ pricing -- 1 : 2 : 5 was
+ * 199 : 390 : 990 -- only the currency and the numbers moved. The scale is
+ * anchored on the Zixi ecosystem's own numbers rather than on any fiat rate,
+ * because no ZXC <-> TWD rate exists anywhere in this repo or in zixi-earth:
+ *   - new accounts are granted 15,000 ZXC (zixi-earth/src/auth.js)
+ *   - chest prizes run 1 -> 50,000 ZXC
+ * so 1,000 is ~1/15 of a signup grant and 5,000 is ~1/3 of one. Generous
+ * enough to be approachable, small enough that the free grant does not make
+ * every paid tier pointless.
+ *
+ * Note the consequence: revenue is now denominated in a token, so a fall in ZXC
+ * cuts revenue proportionally. Yearly stays at 10x monthly (two months free),
+ * same as before -- the discount was not widened.
+ */
+export const PLAN_CURRENCY = "ZXC";
+
 export type Plan = {
   key: string;
   name: string;
@@ -8,6 +27,17 @@ export type Plan = {
   retention: string;
   features: string[];
 };
+
+/**
+ * Single formatter for every plan price.
+ *
+ * The NT$ literal used to be pasted into three different pages, so changing the
+ * currency meant finding every one of them. Keep prices going through this.
+ */
+export function formatPrice(amount: number): string {
+  if (amount === 0) return "免費";
+  return `${amount.toLocaleString()} ${PLAN_CURRENCY}`;
+}
 
 export const PLANS: Plan[] = [
   {
@@ -21,24 +51,24 @@ export const PLANS: Plan[] = [
   {
     key: "pro",
     name: "Pro",
-    monthly: 199,
-    yearly: 1990,
+    monthly: 1000,
+    yearly: 10000,
     retention: "90 天",
     features: ["10 個疊加層", "90 天事件紀錄", "斗內影片", "Email 支援"],
   },
   {
     key: "creator",
     name: "Creator",
-    monthly: 390,
-    yearly: 3900,
+    monthly: 2000,
+    yearly: 20000,
     retention: "1 年",
     features: ["無限疊加層", "1 年事件紀錄", "回放分析", "優先支援"],
   },
   {
     key: "studio",
     name: "Studio",
-    monthly: 990,
-    yearly: 9900,
+    monthly: 5000,
+    yearly: 50000,
     retention: "3 年",
     features: ["無限疊加層", "3 年事件紀錄", "多頻道", "專人支援"],
   },
