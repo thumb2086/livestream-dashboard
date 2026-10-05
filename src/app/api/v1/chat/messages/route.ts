@@ -2,6 +2,7 @@ import { timingSafeEqual as timingSafeEqualBuf } from "node:crypto";
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getOrCreateUser, getSessionId, unauthorized } from "@/lib/getUser";
+import { runLiveCommand } from "@/lib/live-commands";
 
 /** Constant-time compare for shared secrets. Length is checked by the caller. */
 function timingSafeEqual(a: string, b: string): boolean {
@@ -78,7 +79,17 @@ export async function POST(req: Request) {
         isOwner: body.isOwner || false,
       },
     });
-    return NextResponse.json({ ok: true });
+
+    // Every source funnels through this handler -- the chat worker and the
+    // YouTube pull both post here -- so this is the one place a live command can
+    // be evaluated. Until now nothing read LiveCommand at all.
+    const fired = await runLiveCommand(userId, {
+      platform: body.platform,
+      message: body.message,
+      isOwner: body.isOwner === true,
+    });
+
+    return NextResponse.json({ ok: true, command: fired?.trigger ?? null });
   } catch (e) {
     console.error("POST chat message error:", e);
     return NextResponse.json({ error: "Failed to save message" }, { status: 500 });
