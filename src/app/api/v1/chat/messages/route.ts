@@ -43,12 +43,29 @@ export async function POST(req: Request) {
 
     // Destructive, so session-only: the worker key is a shared integration secret,
     // not permission to erase someone's chat.
+    //
+    // A bare `__clear__` used to mean deleteMany({ userId }) -- which also
+    // removed every genuine message ingested from Twitch/YouTube by
+    // /api/v1/chat/messages. Erasing real history needs to be asked for
+    // explicitly; without it the delete is scoped to the simulated names.
     if (body.message === "__clear__") {
       if (workerAuthed) {
         return NextResponse.json({ error: "clear is not available to the worker" }, { status: 403 });
       }
-      await prisma.chatMessage.deleteMany({ where: { userId } });
-      return NextResponse.json({ ok: true, cleared: true });
+      const wipeAll = body.confirm === "all";
+      const names = Array.isArray(body.names)
+        ? body.names.filter((n: unknown): n is string => typeof n === "string").slice(0, 50)
+        : [];
+      if (!wipeAll && names.length === 0) {
+        return NextResponse.json(
+          { error: "refusing to clear: pass `names` to clear simulated rows, or confirm:\"all\" to erase real chat" },
+          { status: 400 }
+        );
+      }
+      const result = await prisma.chatMessage.deleteMany({
+        where: wipeAll ? { userId } : { userId, userName: { in: names } },
+      });
+      return NextResponse.json({ ok: true, cleared: result.count, scope: wipeAll ? "all" : "names" });
     }
 
     await prisma.chatMessage.create({

@@ -12,6 +12,7 @@ export default function TestingPage() {
   const [obsSources, setObsSources] = useState<any[]>([]);
   const [userData, setUserData] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [autoMode, setAutoMode] = useState(false);
   const [origin, setOrigin] = useState("");
@@ -31,10 +32,13 @@ export default function TestingPage() {
   const chatColors = ["text-purple-400", "text-blue-400", "text-green-400", "text-pink-400", "text-yellow-400"];
 
   const toggleAutoMode = async () => {
+    setNotice(null); setError(null);
     const next = !autoMode;
     setAutoMode(next);
     await api.updateUser({ demoMode: next }).catch(() => {});
-    document.querySelectorAll('iframe[src*="/overlay/"]').forEach(el => { if (el instanceof HTMLIFrameElement) el.src = el.src; });
+    // Removed: this reloaded every iframe[src*="/overlay/"] on the page. This page
+    // has no iframes -- previews are <a target="_blank"> -- so the loop was a
+    // guaranteed no-op that looked like it did something.
   };
 
   useEffect(() => {
@@ -75,20 +79,29 @@ export default function TestingPage() {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username: userData?.username || "creator", donorAddress: "0xTestDonor", amount, token: "ZXC", message: donationInput, isTest: true }),
       });
-      if (zixiRes.ok) setError("✅ 測試斗內已送出！重整 overlay 即可看到");
-      else setError(await zixiRes.text().then(t => { try { return JSON.parse(t).error || "斗內記錄失敗"; } catch { return "斗內記錄失敗"; } }));
-    } catch { setError("⚠️ 伺服器連線失敗，請重整後重試"); }
+      if (zixiRes.ok) setNotice("✅ 測試斗內已送出！重整 overlay 即可看到");
+      else setNotice(await zixiRes.text().then(t => { try { return JSON.parse(t).error || "斗內記錄失敗"; } catch { return "斗內記錄失敗"; } }));
+    } catch { setNotice("⚠️ 伺服器連線失敗，請重整後重試"); }
     setDonationInput("");
   };
 
+  // The payload field is `key`, not `sourceKey`, so this never matched -- and
+  // the lookup values below are route *paths* (subtitles, donations, alerts,
+  // stats) while the registered overlay keys are captions, donation-goal,
+  // donation-alert, channel-stats. Both halves were wrong, so getUrl always
+  // returned null: every "Overlay 測試網址" row rendered "（未啟用）" with no
+  // copy button, and the whole 快速連結 sidebar rendered nothing.
   const getUrl = (key: string) => {
-    const src = obsSources.find((s: any) => s.sourceKey === key);
-    return src ? `${origin}/overlay/${key}/${src.token}` : null;
+    const src = obsSources.find((s: any) => s.key === key);
+    if (!src) return null;
+    // The API already returns an absolute url; prefer it over rebuilding here.
+    return src.url ?? `${origin}/overlay/${src.path ?? key}/${src.token}`;
   };
 
   return (
     <div className="max-w-[1080px]">
-      {error && <div className="mb-4 rounded-[var(--ic-radius-md)] border border-red-200 bg-red-50 p-3 text-[13px] text-red-600">{error} — 重整頁面試試看</div>}
+      {error && <div className="mb-4 rounded-[var(--ic-radius-md)] border border-red-200 bg-red-50 p-3 text-[13px] text-red-600">{error}</div>}
+      {notice && <div className="mb-4 rounded-[var(--ic-radius-md)] border border-[var(--ic-hairline)] bg-[var(--ic-surface-2)] p-3 text-[13px] text-[var(--ic-ink-subtle)]">{notice}</div>}
       <div className="mb-4 text-[13px] text-[var(--ic-ink-subtle)]">
         <a href="/dashboard" className="text-[var(--ic-primary)] no-underline">控制中心</a>
         <span className="mx-2 text-[var(--ic-ink-muted)]">/</span>
@@ -107,7 +120,7 @@ export default function TestingPage() {
                 className={`min-h-[32px] rounded-[999px] px-3 text-[12px] font-[500] transition-all ${autoMode ? "border border-transparent bg-green-600 text-white" : "border border-[var(--ic-hairline)] bg-[var(--ic-surface-1)] text-[var(--ic-ink)]"}`}>
                 {autoMode ? "自動模擬中..." : "自動模擬"}
               </button>
-              <button onClick={() => { setMessages([]); fetch("/api/v1/chat/messages", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ platform: "twitch", userName: "系統", message: "__clear__" }) }).catch(() => {}); }} className="flex min-h-[32px] items-center gap-1 rounded-[999px] border border-[var(--ic-hairline)] bg-[var(--ic-surface-1)] px-3 text-[12px] font-[500] text-[var(--ic-ink)] hover:border-red-200 hover:text-red-500">
+              <button onClick={() => { setMessages([]); fetch("/api/v1/chat/messages", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ platform: "twitch", message: "__clear__", names: [...chatNames, "系統", "測試者", "測試贊助者"] }) }).catch(() => {}); }} className="flex min-h-[32px] items-center gap-1 rounded-[999px] border border-[var(--ic-hairline)] bg-[var(--ic-surface-1)] px-3 text-[12px] font-[500] text-[var(--ic-ink)] hover:border-red-200 hover:text-red-500">
                 <Trash2 className="h-3.5 w-3.5" /> 清空
               </button>
             </div>
@@ -150,10 +163,10 @@ export default function TestingPage() {
             <div className="mt-2 grid gap-2.5">
               {[
                 { label: "聊天室疊加層", key: "chat" },
-                { label: "字幕疊加層", key: "subtitles" },
-                { label: "斗內進度條", key: "donations" },
-                { label: "斗內通知", key: "alerts" },
-                { label: "頻道統計", key: "stats" },
+                { label: "字幕疊加層", key: "captions" },
+                { label: "斗內進度條", key: "donation-goal" },
+                { label: "斗內通知", key: "donation-alert" },
+                { label: "頻道統計", key: "channel-stats" },
               ].map((item) => {
                 const url = getUrl(item.key);
                 return (
