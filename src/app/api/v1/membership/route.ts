@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getOrCreateUser, getSessionId, unauthorized } from "@/lib/getUser";
 import { PLANS, QUOTAS, effectivePlan } from "@/lib/plans";
+import { invalidateQuota } from "@/lib/usage";
 
 const str = (v: unknown, max: number) => (typeof v === "string" ? v.trim().slice(0, max) : "");
 
@@ -119,6 +120,10 @@ export async function POST(req: Request) {
           currentPeriodEnd: planKey === "free" ? null : periodEnd,
         },
       });
+
+      // The ceiling just changed, so any memoised admission check for this
+      // account would hand out the old plan's headroom for up to its TTL.
+      invalidateQuota(user.id);
 
       if (planKey !== "free" && status === "pending") {
         const n = Date.now().toString(36).toUpperCase();

@@ -134,19 +134,14 @@ export default function MembershipPage() {
                     {q.used.toLocaleString()} / {q.limit.toLocaleString()} {q.unit}
                   </span>
                 </div>
-                {/* No .member-* progress class exists; bar is inline-styled. */}
-                <div
-                  style={{
-                    height: 8, borderRadius: 999, overflow: "hidden",
-                    background: "var(--ic-surface-4)",
-                  }}
-                >
+                {/* `.usage-progress-*` is the stylesheet's own quota meter -- track, fill and
+                    header are all defined there, so no inline geometry is needed.
+                    `.is-empty` is its muted state; over-quota keeps the danger
+                    colour so an over-limit meter still reads as a problem. */}
+                <div className="usage-progress-track">
                   <div
-                    style={{
-                      height: "100%", width: `${pct}%`, borderRadius: 999,
-                      background: over ? "var(--ic-danger)" : pct > 80 ? "#d97706" : "var(--ic-success)",
-                      transition: "width .22s ease",
-                    }}
+                    className="usage-progress-fill"
+                    style={{ width: `${pct}%`, ...(over ? { background: "var(--ic-danger)" } : {}) }}
                   />
                 </div>
                 {over && q.metric === "overlay" && (

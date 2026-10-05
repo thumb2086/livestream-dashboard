@@ -505,14 +505,37 @@ subscription rows : 1
 
 ### P2 — 品質
 
-- ⚠️ **部署前必須手動驗證：字幕 HTTP 轉錄路徑**
-  `/api/v1/captions/transcribe` 現在需要有效 session（過去完全無驗證，任何能連到 origin
-  的人都能燒 Groq 額度，而且不會出現在帳務頁）。**我無法在這個環境偽造有效 session，
-  所以帶 cookie 的路徑沒有端到端實測** —— `test-captions.mjs` 是直接呼叫 lib，不走 HTTP。
-  已驗證的只有：靜音路徑仍是純本地 16ms（不再付 DB 往返）、無 cookie 時回 401。
-  **驗證方式**：登入後開 `/dashboard/subtitles`，確認字幕會逐句跳出來。若沒跳出來，
-  問題在 fetch 沒帶到 cookie（`src/lib/captions-live.ts` 的 transcribe 呼叫），
-  修法是加 `credentials: "same-origin"`（瀏覽器預設就是，但值得確認）。
+- ~~⚠️ 部署前必須手動驗證：字幕 HTTP 轉錄路徑~~ ✅ **已實測通過**
+  `scripts/test-caption-metering-e2e.ts` 會在真實 DB 建一個拋棄式 user+session，
+  打真的 HTTP 端點，確認「靜音跳過 / 帶 cookie 轉錄 / 計量寫入 / 無 session 拒絕」
+  四件事，最後清掉。需 `npm run build && npx next start -p 3000` 在跑。
+  - 靜音視窗 → 200 skipped（在 auth 之前，16ms，不碰 DB）
+  - 帶 session + 440Hz 音調 → 200，`provider: direct`
+  - **無 session + 真實音訊 → 401**，而且其他所有 API 匿名呼叫本來就都是 401
+    （user / obs / subtitles / donations / stats / captions/segments），
+    所以 transcribe 原本是唯一的破口，補上是**與其餘 API 一致**，不是新限制。
+  - 實測延遲：cold wall ~1.7s / warm wall ~1.3s（upstream ~290–400ms），
+    剩餘是 Neon 往返，見下面計量模組的說明
+
+### 計量模組的三個已修坑（`src/lib/usage.ts`）
+
+1. **`quantity` 必須是 Float。** 原本是 `Int`，而字幕視窗約 1 秒 = 1/60 分鐘，
+   `Math.round(0.0167) = 0` → `if (!qty) return` → **每個短視窗的計量都被靜默丟棄**，
+   `used` 永遠 0（就是我原本要修的那個病）。往上取整更糟：滑動 2.4s 視窗跑 3 小時
+   會算成 4500 分鐘 = **75 小時額度**，60 倍超收。已改成 Float 並 `prisma db push`。
+2. **不可快取 entitlement。** 我第一版把整個 `QuotaCheck` 用 `userId:metric` 快取，
+   結果訂閱從 pending 轉 active 之後仍發放 free 上限長達 TTL —— 那是**被快取授權**。
+   付款結清是在模組外發生的，所以現在 subscription 每次即時讀，只快取用量加總。
+3. **快取缺少基準時不可猜。** `recordUsage` 原本在無快取項時用 `CACHE.set(used=qty)`，
+   等於假設週期總量是 0，實測讓 `used` 從 0 跳成 100003.4。現在只在有項時累加。
+4. `getOrCreateUser` 原本是兩次循序查詢（session→user），改成 `include: { user }` 一次。
+
+### 待決策：字幕計量對重疊視窗會重複計費
+
+`billedSec = max(1, round(durationSec))` 是**每個視窗的長度**，但視窗是刻意重疊的
+（滑動 2.4s 視窗 / 1.2s 步進，`mergeCaption` 存在就是因為重疊）。所以每秒音訊被算兩次。
+正解是計**新增的音訊**（絕對串流位置的差值）而不是視窗長度，取決於客戶端的視窗策略，
+**是產品/實作決定，沒有擅自改**。
 
 ### `overlay` 配額語意不對（已改成誠實顯示）
 

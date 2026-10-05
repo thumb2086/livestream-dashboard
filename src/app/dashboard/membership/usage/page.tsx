@@ -107,19 +107,11 @@ export default function UsagePage() {
                     <span className="member-muted"> / {q.limit.toLocaleString()} {q.unit}</span>
                   </p>
 
-                  {/* No .member-* progress class exists; bar is inline-styled. */}
-                  <div
-                    style={{
-                      height: 7, borderRadius: 999, overflow: "hidden",
-                      background: "var(--ic-surface-4)",
-                    }}
-                  >
+                  {/* `.usage-progress-*` is the stylesheet's own quota meter. */}
+                  <div className="usage-progress-track">
                     <div
-                      style={{
-                        height: "100%", width: `${pct}%`, borderRadius: 999,
-                        background: over ? "var(--ic-danger)" : "var(--ic-success)",
-                        transition: "width .22s ease",
-                      }}
+                      className="usage-progress-fill"
+                      style={{ width: `${pct}%`, ...(over ? { background: "var(--ic-danger)" } : {}) }}
                     />
                   </div>
 

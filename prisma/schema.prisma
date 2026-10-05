@@ -438,7 +438,10 @@ model UsageEvent {
   userId    String
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   metric    String
-  quantity  Int      @default(1)
+  /// Fractional units on purpose. Caption windows are ~1 second = 1/60 of a
+  /// minute; storing whole minutes would round every window down to 0 (metering
+  /// that never moves) or up to 1 (a 3h stream billed 75h of quota).
+  quantity  Float    @default(1)
   note      String   @default("")
   createdAt DateTime @default(now())
 
