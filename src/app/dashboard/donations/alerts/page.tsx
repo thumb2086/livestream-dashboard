@@ -17,15 +17,33 @@ export default function DonationAlertsPage() {
     Promise.all([api.getOBS(), api.getUser()]).then(([o, u]) => { setObsSources(o.sources); setUserName(u.username || ""); }).catch(() => {});
   }, []);
 
-  const alertSource = obsSources.find((s: any) => s.sourceKey === "alerts");
-  const url = alertSource ? `${origin}/overlay/alerts/${alertSource.token}` : null;
+  // Two mistakes here, both confirmed against the backing code:
+  //   the payload field is `key`, not `sourceKey`, so this never matched; and
+  //   the registered overlay key is "donation-alert" (lib/overlays.ts), not
+  //   "alerts" -- "alerts" is its route *path*. Either way url stayed null, the
+  //   複製網址 button below never rendered, and the page always told the user to
+  //   go enable the source in OBS even when it was already enabled.
+  const alertSource = obsSources.find((s: any) => s.key === "donation-alert");
+  // The API already returns an absolute url; prefer it over rebuilding by hand.
+  const url: string | null = alertSource?.url ?? null;
 
   const testAlert = async () => {
-    show("🧪 測試斗內通知已觸發！（檢查 OBS 疊加層）", "success");
-    await fetch("/api/v1/zixi-donations", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username: userName, donorAddress: "0xTestDonor", amount: 300, token: "ZXC", message: "測試斗內通知！", isTest: true }),
-    }).catch(() => {});
+    // Report what actually happened. The success toast used to fire before the
+    // request and regardless of its result, so a 400 "No wallet configured", a
+    // 404, or a total network failure all looked identical -- and the endpoint
+    // writes a real `status: "confirmed"` row, so "fired" has a lasting effect.
+    try {
+      const res = await fetch("/api/v1/zixi-donations", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: userName, donorAddress: "0xTestDonor", amount: 300, token: "ZXC", message: "測試斗內通知！", isTest: true }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body?.error || `操作失敗 (${res.status})`);
+      show("🧪 測試斗內通知已觸發！（檢查 OBS 疊加層）", "success");
+      show("注意：這筆測試會以 confirmed 寫入斗內紀錄與排行榜，需要手動刪除。", "info");
+    } catch (e: any) {
+      show(`❌ 測試通知失敗：${e?.message || "未知錯誤"}`, "error");
+    }
   };
 
   return (
