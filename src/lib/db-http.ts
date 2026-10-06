@@ -63,7 +63,17 @@ export type Row = Record<string, unknown>;
  * @param text  SQL，**只能**用 $1 $2 … 佔位符
  * @param params 依序對應的參數值
  */
-export async function query<T extends Row = Row>(
+// ⚠️ 泛型約束是 `T extends Row`，而 Row = Record<string, unknown>。
+//    呼叫端傳 `ZixiDonationRow` 時那個 interface 沒有 index signature，
+//    所以 TS 會拒絕 —— 這不是簽名錯，是「明確的形狀」與
+//    「開放的字典」之間的衝突。
+//
+//    正確的修法是讓 Row 接受任何物件形狀，而不是放寬成 any：
+//    `T extends Row` 改成 `T extends object`。
+//
+//    而 queryOne 那個錯誤（`does not satisfy the constraint`）是同一個
+//    問題從泛型約束冒出來的連鎖反應。
+export async function query<T extends object = Row>(
   text: string,
   params: unknown[] = [],
 ): Promise<T[]> {
@@ -99,7 +109,7 @@ export async function query<T extends Row = Row>(
  * 那與 null 在後續 `if (!x)` 的判斷上是等價的，
  * 但**型別**不是，所以這裡明確收斂成 null。
  */
-export async function queryOne<T extends Row = Row>(
+export async function queryOne<T extends object = Row>(
   text: string,
   params: unknown[] = [],
 ): Promise<T | null> {
@@ -133,6 +143,110 @@ export interface OverlaySource {
     maxMessages: string;
     fontSize: string;
   } | null;
+}
+
+/**
+ * 取一個 OBS 來源 + 功能設定（overlay-render.ts 的 resolveOverlay 相容層）。
+ *
+ * ─────────────────────────────────────────────────────────
+ * 為什麼這裡需要另一組查詢，而不是讓那 7 條路由各自呼叫
+ * ─────────────────────────────────────────────────────────
+ *
+ * `resolveOverlay()` 在 src/lib/overlay-render.ts，而它寫的是：
+ *
+ *     (prisma as any).oBSSource.findFirst(...)
+ *
+ * **那個 `as any` cast 讓我的掃描漏掉它。**
+ *
+ * 我用 /\bprisma\.\w/ 掃過 11 條 overlay 路由，結論是
+ * 「11 條全部零 Prisma」—— 而那 7 條走的是共享的
+ * overlay-render.ts，不是路由本身，所以我根本没看到它。
+ *
+ * 而「11 條全部乾淨」這個結論還寫進了 commit 訊息。
+ *
+ * ⚠️ 這是今晚最有害的一類錯誤形狀：
+ *    **掃描器的盲點讓結論變得比事實更樂觀。**
+ *    我不是漏報一個警告，我是報了一個「全綠」。
+ *
+ * 所以：掃描的判準必須包含「有沒有別的檔案在共用層用 Prisma」，
+ * 而不是只掃當前目錄。
+ */
+export interface OverlayFeatureSettings {
+  sourceKey: string;
+  user: { id: string; name: string; demoMode: boolean; followers: number };
+  settings: Record<string, unknown>;
+}
+
+export async function resolveOverlayViaHttp(
+  token: string,
+  sourceKey: string,
+): Promise<{ sourceKey: string; user: OverlayFeatureSettings['user']; settings: Record<string, unknown> } | null> {
+  const base = await getOverlaySource(token, sourceKey);
+  if (!base) return null;
+
+  const row = await queryOne<{ settings: string | null }>(
+    `SELECT s."settings"
+       FROM "FeatureSettings" s
+      WHERE s."userId" = $1 AND s."featureKey" = $2
+      LIMIT 1`,
+    [base.user.id, sourceKey],
+  );
+
+  let settings: Record<string, unknown> = {};
+  if (row?.settings) {
+    try { settings = JSON.parse(row.settings) || {}; } catch { settings = {}; }
+  }
+  return { sourceKey, user: base.user, settings };
+}
+
+/**
+ * 取一個 OBS 來源 + 其擁有者的**捐款目標**（依 sortOrder 排序）。
+ *
+ * 為什麼要另一個函式而不是讓 getOverlaySource 接受關聯：
+ * 那是把「這個 overlay 需要什麼」變成呼叫端的負擔，
+ * 而各路由需要的關聯完全不同（chat 要 chatSettings、
+ * donations 要 donationGoals）。分開函式讓差異留在型別裡。
+ */
+export interface DonationGoal {
+  emoji: string;
+  title: string;
+  current: number;
+  goal: number;
+}
+
+export interface OverlaySourceWithGoals extends OverlaySource {
+  donationGoals: DonationGoal[];
+}
+
+export async function getOverlaySourceWithGoals(
+  token: string,
+  sourceKey: string,
+): Promise<OverlaySourceWithGoals | null> {
+  const base = await getOverlaySource(token, sourceKey);
+  if (!base) return null;
+
+  const goals = await query<{
+    emoji: string | null;
+    title: string;
+    current: number;
+    goal: number;
+  }>(
+    `SELECT g."emoji", g."title", g."current", g."goal"
+       FROM "DonationGoal" g
+      WHERE g."userId" = $1
+      ORDER BY g."sortOrder" ASC`,
+    [base.user.id],
+  );
+
+  return {
+    ...base,
+    donationGoals: goals.map((g) => ({
+      emoji: g.emoji ?? "",
+      title: g.title,
+      current: Number(g.current ?? 0),
+      goal: Number(g.goal ?? 0),
+    })),
+  };
 }
 
 export async function getOverlaySource(

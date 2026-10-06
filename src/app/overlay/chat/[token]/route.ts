@@ -36,7 +36,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ token: 
 <div id="messages" style="overflow:auto;flex:1;scrollbar-width:thin"></div>
 </div>
 <script>
-(function(){ var msgs=document.getElementById('messages'), max=${maxMessages}, lastTime=null;
+(function(){ var msgs=document.getElementById('messages'), max=${maxMessages};
   function addMsg(u,m,c,p){
     var d=document.createElement('div');
     d.style.cssText='display:flex;gap:8px;align-items:start;padding:4px 0;opacity:0;transition:opacity 0.3s';
@@ -49,14 +49,30 @@ export async function GET(_req: Request, { params }: { params: Promise<{ token: 
   var colors=["#a78bfa","#60a5fa","#34d399","#f472b6","#fbbf24"];
   var nc=function(){return colors[Math.floor(Math.random()*colors.length)]};
   function poll(){
-    var url='/api/v1/chat/messages'+(lastTime?'?since='+lastTime:'');
+    // 2026-10-06：從 /api/v1/chat/messages 改成 /api/v1/overlay-data/chat。
+    //
+    // 原因：那一支用 session cookie 授權，而 **OBS 的瀏覽器沒有 cookie**
+    // （overlay 是用 ?token= 開啟的獨立頁面）。所以它永遠拿不到資料 ——
+    // 而症狀是靜默的：回應裡沒有 messages 時直接 return，
+    // 使用者只會看到「聊天室一直是空的」。
+    //
+    // 其他所有 overlay 都已經用 /api/v1/overlay-data/<key>?token=
+    // （該端點的註解寫著「Authenticated by the overlay token, not the
+    // user session — OBS cannot send cookies」）——
+    // **chat 是唯一沒跟上的那一個。**
+    //
+    // token 寫在 HTML 裡是刻意的：那一頁本身就是用 token 開啟的，
+    // 而 token 只授予讀取該 source 的 overlay 資料。
+    //
+    // ⚠️ 這段註解不能用反引號 —— 整個 <script> 是在 template literal 裡，
+    //    反引號會終止字串。那是我第一版的語法錯（tsc 直接報在這行）。
+    var url='/api/v1/overlay-data/chat?token='+encodeURIComponent(${JSON.stringify(token)});
     fetch(url).then(function(r){return r.json()}).then(function(d){
-      if(!d.messages)return;
-      for(var i=0;i<d.messages.length;i++){
-        var m=d.messages[i];
-        if(m.createdAt>=(lastTime||'')){addMsg(m.userName,m.message,nc(),m.avatarUrl);}
+      var msgs=(d&&(d.items||d.messages))||[];
+      for(var i=0;i<msgs.length;i++){
+        var m=msgs[i];
+        addMsg(m.userName||m.name||'觀眾', m.message||m.text||'', nc(), m.avatarUrl||'');
       }
-      if(d.messages.length>0)lastTime=d.messages[d.messages.length-1].createdAt;
     }).catch(function(){});
   }
   setInterval(poll,10000);setTimeout(poll,2000);

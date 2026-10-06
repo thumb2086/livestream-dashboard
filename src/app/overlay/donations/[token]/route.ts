@@ -1,17 +1,21 @@
-import { prisma } from "@/lib/prisma";
+// 2026-10-06：從 Prisma 改成 Neon HTTP（Workers 相容）。
+// 與 overlay/{chat,stats,alerts,subtitles} 同一個原因：
+// Prisma 7 的 query compiler 是 WASM，而 Workers 拒絕動態 WASM codegen。
+// 這條是最後一條還在用 prisma.oBSSource 的 overlay 路由 —— 其餘 10 條
+// 要嘛已改寫，要嘛本來就不碰 DB。
+import { getOverlaySourceWithGoals } from "@/lib/db-http";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(_req: Request, { params }: { params: Promise<{ token: string }> }) {
   try {
     const { token } = await params;
-    const source = await prisma.oBSSource.findFirst({
-      where: { token, sourceKey: "donation-goal" },
-      include: { user: { include: { donationGoals: { orderBy: { sortOrder: "asc" } } } } },
-    });
-    if (!source || !source.enabled) return new Response("Not Found", { status: 404 });
+    const source = await getOverlaySourceWithGoals(token, "donation-goal");
+    // enabled 的檢查已移進 getOverlaySource —— 停用的來源回 null，
+    // 而 null 同時代表「token 不存在」與「已停用」，對呼叫端是同一件事。
+    if (!source) return new Response("Not Found", { status: 404 });
 
-    const goals = source.user.donationGoals;
+    const goals = source.donationGoals;
     const goalHtml = goals.map((g: any) => {
       const pct = Math.min(100, Math.round((g.current / g.goal) * 100));
       return `<div style="background:rgba(0,0,0,0.7);border-radius:12px;padding:12px 16px;margin-bottom:8px">

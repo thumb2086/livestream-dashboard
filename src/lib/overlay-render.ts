@@ -1,24 +1,31 @@
-import { prisma } from "./prisma";
+// 2026-10-06：從 Prisma 改成 Neon HTTP（Workers 相容）。
+//
+// 原本寫的是 `(prisma as any).oBSSource.findFirst(...)` —— 而那個
+// `as any` cast 讓我的掃描漏掉了這個檔案：
+//   · 我只掃了 src/app/overlay/**/route.ts，沒掃共用的 src/lib/
+//   · 結論寫成「11 條 overlay 全部零 Prisma」—— 而那 7 條走這裡
+//
+// ⚠️ 那是今晚最有害的錯誤形狀：**掃描器的盲點讓結論比事實更樂觀。**
+//    我不是漏報一個警告，我是報了一個「全綠」。
+//    而依那個結論，我就沒有理由來修這裡。
+//
+// 而這也解釋了為什麼 overlay/{scoreboard,live-viewers,donation-ticker,
+// follower-alert,…} 那 7 條在 Workers 上仍然是 500：它們呼叫的是這裡。
+import { resolveOverlayViaHttp } from "./db-http";
 import { overlayByKey } from "./overlays";
 
 /** Resolve an overlay token to its owning user + saved feature settings. */
 export async function resolveOverlay(token: string, sourceKey: string) {
-  const source = await (prisma as any).oBSSource.findFirst({
-    where: { token, sourceKey },
-    include: { user: true },
-  });
-  if (!source || !source.enabled) return null;
-
-  const def = overlayByKey(sourceKey);
-  const row = await (prisma as any).featureSettings.findUnique({
-    where: { userId_featureKey: { userId: source.userId, featureKey: sourceKey } },
-  });
+  const resolved = await resolveOverlayViaHttp(token, sourceKey);
+  if (!resolved) return null;
 
   return {
-    source,
-    user: source.user,
-    settings: (row?.settings ?? {}) as Record<string, unknown>,
-    def,
+    // 相容層：呼叫端拿的是 `source` / `user` / `settings` / `def`。
+    // 這裡保留同樣的形狀，是為了不改動 7 條呼叫端。
+    source: { token, sourceKey, userId: resolved.user.id },
+    user: resolved.user,
+    settings: resolved.settings,
+    def: overlayByKey(sourceKey),
   };
 }
 

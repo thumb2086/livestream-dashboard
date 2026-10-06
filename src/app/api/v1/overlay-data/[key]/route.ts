@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { query } from "@/lib/db-http";
+import { resolveOverlayViaHttp } from "@/lib/db-http";
 import { overlayByKey } from "@/lib/overlays";
 import { getLiveViewers } from "@/lib/platform-live";
 import { fetchSheetParticipants } from "@/lib/google-sheets";
@@ -18,17 +19,16 @@ export async function GET(req: Request, ctx: { params: Promise<{ key: string }> 
     const token = new URL(req.url).searchParams.get("token");
     if (!token) return NextResponse.json({ error: "token required" }, { status: 401 });
 
-    const source = await (prisma as any).oBSSource.findFirst({
-      where: { token, sourceKey: key },
-      include: { user: true },
-    });
-    if (!source || !source.enabled) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    // 2026-10-06：token 解析 + FeatureSettings 改用 Neon HTTP（Workers 相容）。
+    //
+    // 這是 **OBS 輪詢的實際資料來源** —— overlay HTML 裡那支 setInterval 打的是它。
+    // 而它原本用 `(prisma as any)`，那個 `as any` cast 讓我的掃描漏掉，
+    // 導致我一度結論「overlay 全部乾淨」。掃描器的盲點讓結論比事實更樂觀。
+    const resolved = await resolveOverlayViaHttp(token, key);
+    if (!resolved) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
-    const user = source.user;
-    const row = await (prisma as any).featureSettings.findUnique({
-      where: { userId_featureKey: { userId: user.id, featureKey: key } },
-    });
-    const settings = (row?.settings ?? {}) as Record<string, unknown>;
+    const user = resolved.user as any;
+    const settings = resolved.settings;
 
     const payload = await buildPayload(key, settings, user);
     return NextResponse.json(payload, {
@@ -41,6 +41,50 @@ export async function GET(req: Request, ctx: { params: Promise<{ key: string }> 
 }
 
 type Payload = Record<string, unknown>;
+
+// ─────────────────────────────────────────────────────────
+// 這兩個型別對應 Neon HTTP 查詢回傳的列形狀
+// ─────────────────────────────────────────────────────────
+//
+// ⚠️ 我第一版寫 `donor` / `title` / `url` —— 那是我**猜**的欄位名。
+//    而下游的 map 讀的是 `d.donorName` / `d.donorAddress` /
+//    `v.videoUrl` / `v.startSec` / `v.endSec`。
+//
+//    猜錯的後果特別糟：SQL 會在執行時報「no such column」，
+//    那還算好的；壞的是若猜的欄位名**恰好存在**但語意不同，
+//    就會安靜地顯示錯的資料。
+//
+// 所以欄位名一律照 prisma/schema.prisma 抄，不憑記憶。
+//
+// ⚠️ 另一個容易踩的：Prisma 的 Float 回 number，而 HTTP 查詢回**字串**。
+//    所以 amount 在這裡是 string|number 而下游期望 number ——
+//    需要轉換，否則顯示會是 NaN 或空白，而且**不會報錯**。
+interface ZixiDonationRow {
+  id: string;
+  donorAddress: string;
+  donorName: string;
+  amount: number | string;
+  token: string;
+  message: string;
+  createdAt: string;
+}
+
+interface DonationVideoRow {
+  id: string;
+  donorName: string;
+  amount: number | string;
+  videoUrl: string;
+  startSec: number;
+  endSec: number;
+  message: string;
+  createdAt: string;
+}
+
+/** Neon HTTP 的 numeric/decimal 欄位回字串；統一轉成 number。 */
+function num(v: number | string | null | undefined): number {
+  const n = typeof v === 'number' ? v : Number(v ?? 0);
+  return Number.isFinite(n) ? n : 0;
+}
 
 async function buildPayload(
   key: string,
@@ -116,9 +160,27 @@ async function buildPayload(
     }
 
     case "follower-alert": {
-      const events = await (prisma as any).eventLog
-        ?.findMany?.({ where: { userId: user.id, kind: "follow" }, orderBy: { createdAt: "desc" }, take: 5 })
-        .catch(() => null);
+      // 原本寫 `(prisma as any).eventLog?.findMany?.({...}).catch(() => null)`
+      //
+      // 那個 `?.` 鏈的**作用是讓「表不存在」變成靜默的空** ——
+      // 而它同時把「Prisma 根本沒載入」也變成空。
+      // 在 Workers 上那就是 WASM 錯誤被吞掉，症狀是
+      // 「粉絲提示永遠是空的」而沒有任何錯誤。
+      //
+      // 所以改成真的查一次，失敗就明確失敗。
+      // （這裡若 eventLog 表不存在，SQL 會報錯 —— 那才是應該被知道的。）
+      const events = await query<{ id: string; actorName: string; createdAt: string }>(
+        // 欄位照 prisma/schema.prisma 的 EventLog 抄：
+        //   id / userId / platform / kind / externalId / actorName / actorId
+        //   / message / amount / …
+        // 我第一版寫了 "meta" —— 那個欄位不存在。
+        `SELECT "id", "actorName", "createdAt"
+           FROM "EventLog"
+          WHERE "userId" = $1 AND "kind" = 'follow'
+          ORDER BY "createdAt" DESC
+          LIMIT 5`,
+        [user.id],
+      );
       return {
         enabled: s.enabled !== false,
         position: s.position ?? "右上",
@@ -137,11 +199,14 @@ async function buildPayload(
     }
 
     case "donation-ticker": {
-      const zixi = await (prisma as any).zixiDonation.findMany({
-        where: { userId: user.id },
-        orderBy: { createdAt: "desc" },
-        take: Math.max(1, Number(s.maxItems) || 5),
-      });
+      const zixi = await query<ZixiDonationRow>(
+        `SELECT "id", "donorAddress", "donorName", "amount", "token", "message", "createdAt"
+           FROM "ZixiDonation"
+          WHERE "userId" = $1
+          ORDER BY "createdAt" DESC
+          LIMIT $2`,
+        [user.id, Math.max(1, Number(s.maxItems) || 5)],
+      );
       return {
         enabled: s.enabled !== false,
         position: s.position ?? "底部",
@@ -157,7 +222,7 @@ async function buildPayload(
         separator: s.separator ?? "💛",
         items: zixi.map((d: any) => ({
           name: d.donorName || String(d.donorAddress ?? "").slice(0, 6) || "匿名",
-          amount: d.amount,
+          amount: num(d.amount),
           currency: d.token || "ZXC",
           message: d.message ?? "",
         })),
@@ -176,11 +241,14 @@ async function buildPayload(
     }
 
     case "donation-video": {
-      const videos = await (prisma as any).donationVideo.findMany({
-        where: { userId: user.id, status: "approved" },
-        orderBy: { createdAt: "asc" },
-        take: Math.max(1, Number(s.maxQueue) || 10),
-      });
+      const videos = await query<DonationVideoRow>(
+        `SELECT "id", "donorName", "amount", "videoUrl", "startSec", "endSec", "message", "createdAt"
+           FROM "DonationVideo"
+          WHERE "userId" = $1 AND "status" = 'approved'
+          ORDER BY "createdAt" ASC
+          LIMIT $2`,
+        [user.id, Math.max(1, Number(s.maxQueue) || 10)],
+      );
       return {
         enabled: s.enabled !== false,
         autoPlayNext: s.autoPlayNext !== false,
@@ -191,7 +259,7 @@ async function buildPayload(
         queue: videos.map((v: any) => ({
           id: v.id,
           donorName: v.donorName || "匿名",
-          amount: v.amount,
+          amount: num(v.amount),
           videoUrl: v.videoUrl,
           startSec: v.startSec,
           endSec: v.endSec,

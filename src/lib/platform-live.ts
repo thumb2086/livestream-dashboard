@@ -11,6 +11,28 @@
  *     every platform call fail silently.
  */
 
+// 2026-10-06：從 Prisma 改成 Neon HTTP（Workers 相容）。
+//
+// 這個檔案是**共用層**，被 getLiveViewers / ensureFreshToken 呼叫 ——
+// 所以 `live-viewers` 那條 overlay 在 Workers 上必然 500，
+// 即使 overlay/[token] 與 overlay-data/[key] 本身都已改寫。
+//
+// ⚠️ 這與我在 overlay-render.ts 犯的錯完全同型：
+//    「overlay 路由已經改完了」**不等於**「overlay 能跑」，
+//    因為它們還會呼叫共用的 helper。而我那時只掃了路由。
+//
+// ⚠️ 而且這裡原本用的是 **`await import("./prisma")` 動態載入**，
+//    所以我的掃描器（只認靜態 `prisma.x.y`）一個字都抓不到。
+//    那是比 `as any` 更隱蔽的盲點 —— 掃描器的 pattern 決定了它看不見什麼。
+//
+// 外部 API（Twitch/YouTube）不動：那是單純的 fetch，Workers 原生支援。
+// 擋路的只有 Prisma。
+import {
+  listConnectedPlatforms,
+  saveLiveViewers,
+  saveOAuthTokens,
+} from "./platform-live-http";
+
 const TWITCH_ID = "https://id.twitch.tv/oauth2/token";
 const TWITCH_API = "https://api.twitch.tv/helix";
 
@@ -44,13 +66,10 @@ function viewerCacheGet(userId: string): CacheEntry | null {
  * platform could report one (so callers can tell "offline" from "unknown").
  */
 export async function getLiveViewers(userId: string): Promise<number | null> {
-  const prisma = (await import("./prisma")).prisma;
   const cached = viewerCacheGet(userId);
   if (cached) return cached.viewers;
 
-  const conns = (await prisma.platformConnection.findMany({
-    where: { userId, connected: true },
-  })) as unknown as PlatformConn[];
+  const conns = (await listConnectedPlatforms(userId)) as unknown as PlatformConn[];
 
   if (conns.length === 0) {
     viewerCache.set(userId, { viewers: null, at: Date.now() });
@@ -95,12 +114,7 @@ export async function getLiveViewers(userId: string): Promise<number | null> {
 
     if (value !== null) total = (total ?? 0) + value;
     if (value !== null || conn.liveViewers !== null) {
-      await prisma.platformConnection
-        .update({
-          where: { id: conn.id },
-          data: { liveViewers: value, liveUpdatedAt: new Date() },
-        })
-        .catch(() => {});
+      await saveLiveViewers(conn.id, value);
     }
   }
 
@@ -119,7 +133,6 @@ export async function ensureFreshToken(conn: PlatformConn): Promise<string | nul
     conn.tokenExpiresAt instanceof Date && conn.tokenExpiresAt.getTime() - Date.now() < 60_000;
   if (!expiresSoon || !conn.refreshToken) return conn.accessToken;
 
-  const prisma = (await import("./prisma")).prisma;
   const clientId = process.env.TWITCH_CLIENT_ID;
   const clientSecret = process.env.TWITCH_CLIENT_SECRET;
   if (!clientId || !clientSecret) return conn.accessToken;
@@ -140,17 +153,7 @@ export async function ensureFreshToken(conn: PlatformConn): Promise<string | nul
     if (!data.access_token) return conn.accessToken;
 
     const expiresIn = Number(data.expires_in) || 0;
-    await prisma.platformConnection
-      .update({
-        where: { id: conn.id },
-        data: {
-          accessToken: data.access_token,
-          // Twitch only rotates the refresh token when the old one is still valid.
-          ...(data.refresh_token ? { refreshToken: data.refresh_token } : {}),
-          tokenExpiresAt: expiresIn ? new Date(Date.now() + expiresIn * 1000) : null,
-        },
-      })
-      .catch(() => {});
+    await saveOAuthTokens(conn.id, data.access_token, data.refresh_token ?? null, expiresIn ? expiresIn * 1000 : null);
     return data.access_token as string;
   } catch {
     return conn.accessToken;
