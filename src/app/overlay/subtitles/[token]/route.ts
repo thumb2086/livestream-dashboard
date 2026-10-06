@@ -1,4 +1,4 @@
-import { prisma } from "@/lib/prisma";
+import { getOverlaySource } from "@/lib/db-http";
 import { getSubtitleSettings } from "@/lib/subtitle-config";
 
 export const dynamic = "force-dynamic";
@@ -16,11 +16,8 @@ const POSITION_CLASS: Record<string, string> = {
 export async function GET(_req: Request, { params }: { params: Promise<{ token: string }> }) {
   try {
     const { token } = await params;
-    const source = await prisma.oBSSource.findFirst({
-      where: { token, sourceKey: "captions" },
-      include: { user: true },
-    });
-    if (!source || !source.enabled) return new Response("Not Found", { status: 404 });
+    const source = await getOverlaySource(token, "captions");
+    if (!source) return new Response("Not Found", { status: 404 });
 
     const user = source.user;
     const s = await getSubtitleSettings(user.id);

@@ -1,20 +1,26 @@
-import { prisma } from "@/lib/prisma";
+// 2026-10-06：從 Prisma 改成 Neon HTTP（Workers 相容）。
+//
+// 為什麼：Prisma 7 的 query compiler 是 WASM，而 Cloudflare Workers 拒絕
+// 它需要的動態 WASM codegen：
+//   CompileError: WebAssembly.Module(): Wasm code generation disallowed by embedder
+//
+// 實測確認換 adapter 繞不過（WASM 在 Prisma core，不在 adapter）。
+// 而 @neondatabase/serverless 的 neon() 是 fetch-based，純 JS，原生支援。
+//
+// 這個路由只有一個查詢，所以整條搬過去的成本很低 ——
+// 全專案 118 個 prisma.* 呼叫點是分批搬的議題，不該混在一次部署裡。
+import { getOverlaySource } from "@/lib/db-http";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(_req: Request, { params }: { params: Promise<{ token: string }> }) {
   try {
     const { token } = await params;
-    const source = await prisma.oBSSource.findFirst({
-      where: { token, sourceKey: "chat" },
-      include: { user: { include: { chatSettings: true } } },
-    });
-    if (!source || !source.enabled) return new Response("Not Found", { status: 404 });
+    const source = await getOverlaySource(token, "chat");
+    if (!source) return new Response("Not Found", { status: 404 });
 
-    const user = source.user;
-    const demoMode = user.demoMode;
-    console.error("Chat overlay demoMode:", demoMode);
-    const s = user.chatSettings;
+    const demoMode = source.user.demoMode;
+    const s = source.chatSettings;
     const isDark = s?.theme === "dark";
     const isTransparent = s?.theme === "transparent";
     const bg = isDark ? "#000000cc" : isTransparent ? "transparent" : "#ffffffcc";

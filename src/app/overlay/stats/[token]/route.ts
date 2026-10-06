@@ -1,15 +1,12 @@
-import { prisma } from "@/lib/prisma";
+import { getOverlaySource } from "@/lib/db-http";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(_req: Request, { params }: { params: Promise<{ token: string }> }) {
   try {
     const { token } = await params;
-    const source = await prisma.oBSSource.findFirst({
-      where: { token, sourceKey: "channel-stats" },
-      include: { user: true },
-    });
-    if (!source || !source.enabled) return new Response("Not Found", { status: 404 });
+    const source = await getOverlaySource(token, "channel-stats");
+    if (!source) return new Response("Not Found", { status: 404 });
 
     const user = source.user;
     const demoMode = user.demoMode;
