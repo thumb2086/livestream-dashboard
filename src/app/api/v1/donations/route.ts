@@ -1,15 +1,22 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+// 2026-10-06：從 Prisma 改成 Neon HTTP（Workers 相容）。
+// Prisma 7 的 query compiler 是 WASM，而 Workers 拒絕動態 WASM codegen。
+//
+// ⚠️ 這條路由有 11 處 Prisma，而且它是「創作者設定斗內」的實際功能。
+//   壞掉的症狀是 GET 回 500、前端顯示「載入失敗」——
+//   而那看起來像網路問題，不是資料庫問題。
+import {
+  listGoals, countGoals, createGoal, deleteGoal, updateGoal,
+  updateDonationSettings, createTestDonation, advanceGoal,
+  donationSettings, num,
+} from "@/lib/donations-http";
 import { getOrCreateUser, getSessionId, unauthorized } from "@/lib/getUser";
 
 export async function GET(req: Request) {
   try {
     const user = await getOrCreateUser(getSessionId(req));
     if (!user) return unauthorized();
-    const goals = await prisma.donationGoal.findMany({
-      where: { userId: user.id },
-      orderBy: { sortOrder: "asc" },
-    });
+    const goals = await listGoals(user.id);
     return NextResponse.json({
       goals, minAmount: user.donationMinAmount, soundEffect: user.donationSound,
       totalReceived: user.donationTotal, donorCount: user.donationDonors,
@@ -21,8 +28,12 @@ export async function GET(req: Request) {
 }
 
 async function refresh(userId: string) {
-  const user = (await prisma.user.findUnique({ where: { id: userId } }))!;
-  const goals = await prisma.donationGoal.findMany({ where: { userId }, orderBy: { sortOrder: "asc" } });
+  // ⚠️ 原本是 findUnique + 強制斷言（!）—— 查不到就 undefined，! 只是騙過
+    // 型別，然後在下一行讀 user.donationMinAmount 時炸成 TypeError。
+    // 現在回 null 並明確回 401/404。
+    const user = await donationSettings(userId);
+    if (!user) return NextResponse.json({ error: 'User not found' }, { status: 404 });
+    const goals = await listGoals(userId);
   return NextResponse.json({
     goals, minAmount: user.donationMinAmount, soundEffect: user.donationSound,
     totalReceived: user.donationTotal, donorCount: user.donationDonors,
@@ -38,9 +49,12 @@ export async function POST(req: Request) {
     if (body._meta === "updateUser") {
       // Totals are server-computed via simulate/confirmed donations only.
       // Accepting totalReceived/donorCount from client allows stats forgery.
-      await prisma.user.update({
-        where: { id: user.id },
-        data: { donationMinAmount: body.minAmount ?? user.donationMinAmount, donationSound: body.soundEffect ?? user.donationSound },
+      //
+      // ⚠️ 這裡**只**更新設定，不碰 totalReceived / donorCount ——
+      //    那正是上面註解在防的偽造途徑。改寫時要盯住這點。
+      await updateDonationSettings(user.id, {
+        donationMinAmount: body.minAmount ?? user.donationMinAmount,
+        donationSound: body.soundEffect ?? user.donationSound,
       });
       return refresh(user.id);
     }
@@ -49,22 +63,36 @@ export async function POST(req: Request) {
       if (!body.title || typeof body.title !== "string" || !body.title.trim() || typeof body.goal !== "number" || body.goal <= 0) {
         return NextResponse.json({ error: "Invalid goal data" }, { status: 400 });
       }
-      const count = await prisma.donationGoal.count({ where: { userId: user.id } });
-      await prisma.donationGoal.create({ data: { userId: user.id, title: body.title.trim(), emoji: body.emoji || "🎯", goal: body.goal, current: 0, sortOrder: count } });
+      // ⚠️ sortOrder = 現有目標數量 —— 所以「刪掉中間一個」之後，
+      //    新增的目標會拿到與別人重複的 sortOrder。
+      //    那不是我改壞的，是**繼承**的行為；ORDER BY 在相同 sortOrder
+      //    時順序未定義。記錄下來是為了讓後續有人知道那不是疏漏。
+      const count = await countGoals(user.id);
+      await createGoal(user.id, {
+        title: body.title.trim(),
+        emoji: body.emoji || "🎯",
+        goal: body.goal,
+        sortOrder: count,
+      });
       return refresh(user.id);
     }
 
     if (body._meta === "deleteGoal") {
       if (!body.id) return NextResponse.json({ error: "Missing goal id" }, { status: 400 });
-      await prisma.donationGoal.deleteMany({ where: { id: body.id, userId: user.id } });
+      // ⚠️ where 裡的 userId 是**所有權檢查** —— 絕不能只帶 id。
+      //   而回傳值（是否真的刪到）原始碼沒有檢查：
+      //   「刪掉不存在的目標」與「刪掉別人的目標」外觀完全相同。
+      await deleteGoal(body.id, user.id);
       return refresh(user.id);
     }
 
     if (body._meta === "updateGoal") {
       if (!body.id) return NextResponse.json({ error: "Missing goal id" }, { status: 400 });
-      await prisma.donationGoal.updateMany({
-        where: { id: body.id, userId: user.id },
-        data: { title: body.title, goal: body.goal, emoji: body.emoji, current: body.current },
+      await updateGoal(body.id, user.id, {
+        title: body.title,
+        goal: body.goal,
+        emoji: body.emoji,
+        current: body.current,
       });
       return refresh(user.id);
     }
@@ -87,28 +115,19 @@ export async function POST(req: Request) {
       // Feed the overlays, which read zixiDonation, rather than the money
       // counters. txHash "TEST" marks the row so it can be identified and
       // removed from the donation ledger.
-      await prisma.zixiDonation.create({
-        data: {
-          userId: user.id,
-          donorAddress: "0xTEST",
-          donorName: "測試贊助者",
-          amount,
-          token: "TWD",
-          message: "這是一筆測試紀錄，可在斗內紀錄中刪除",
-          txHash: "TEST",
-          status: "confirmed",
-        },
-      });
+      await createTestDonation(user.id, amount);
 
       // The goal bar is the thing under test, so it still advances -- bounded by
       // the goal, so it can complete it but never overshoot.
-      const goals = await prisma.donationGoal.findMany({ where: { userId: user.id }, orderBy: { sortOrder: "asc" } });
-      const incompleteGoal = goals.find((g: { current: number; goal: number }) => g.current < g.goal);
+      //
+      // ⚠️ current / goal 在 schema 是 **Int**，而 amount 是數字。
+      //    這裡的 Math.min(...) 回傳整數 —— 與 DB 的 Int 一致。
+      //    若哪天上改成 Float，Neon 會回字串，
+      //    而 Math.min(string, number) 會得到 NaN，且**不會報錯**。
+      const goals = await listGoals(user.id);
+      const incompleteGoal = goals.find((g) => g.current < g.goal);
       if (incompleteGoal) {
-        await prisma.donationGoal.update({
-          where: { id: incompleteGoal.id },
-          data: { current: Math.min(incompleteGoal.current + amount, incompleteGoal.goal) },
-        });
+        await advanceGoal(incompleteGoal.id, incompleteGoal.current + amount, incompleteGoal.goal);
       }
       return refresh(user.id);
     }
