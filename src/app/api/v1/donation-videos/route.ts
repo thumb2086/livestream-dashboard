@@ -1,5 +1,16 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+// 2026-10-06：從 Prisma 改成 Neon HTTP（Workers 相容）。
+// 原本 11 處全部是 (prisma as any) —— 而那個 cast 讓我的掃描器
+// 一度把這個檔案判成「零 Prisma」。這是今晚第三次同型。
+//
+// ⚠️ 所有權注意：這條路由是「**一次檢查涵蓋全部動作**」，
+//    不是每個分支各自帶 userId。所以下面各分支的 where 只有 id 是正確的。
+//    見 lib/donation-videos-http.ts 檔頭。
+import {
+  listVideos, userIdByUsername, createVideo, ownedVideo,
+  approveVideo, rejectVideo, markPlayed, deleteVideo,
+  videoSettings,
+} from "@/lib/donation-videos-http";
 import { getOrCreateUser, getSessionId, unauthorized } from "@/lib/getUser";
 
 type Ctx = { params: Promise<Record<string, string>> };
@@ -27,13 +38,10 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "donorName is required" }, { status: 400 });
     }
 
-    const owner = await (prisma as any).user.findUnique({ where: { username } });
-    if (!owner) return NextResponse.json({ error: "creator not found" }, { status: 404 });
+    const ownerId = await userIdByUsername(username);
+    if (!ownerId) return NextResponse.json({ error: "creator not found" }, { status: 404 });
 
-    const cfg =
-      (await (prisma as any).featureSettings.findUnique({
-        where: { userId_featureKey: { userId: owner.id, featureKey: "donation-video" } },
-      }))?.settings ?? {};
+    const cfg = await videoSettings(ownerId, "donation-video");
     if (cfg.enabled === false) {
       return NextResponse.json({ error: "video requests are disabled" }, { status: 403 });
     }
@@ -42,17 +50,8 @@ export async function POST(req: Request) {
     const maxClip = Number(cfg.maxClipSeconds) || 60;
     const endSec = Math.min(startSec + maxClip, startSec + 3600);
 
-    const row = await (prisma as any).donationVideo.create({
-      data: {
-        userId: owner.id,
-        donorName,
-        amount,
-        videoUrl,
-        startSec,
-        endSec,
-        message,
-        status: "pending_review",
-      },
+    const row = await createVideo(ownerId, {
+      donorName, amount, videoUrl, startSec, endSec, message,
     });
     return NextResponse.json({ ok: true, id: row.id }, { status: 201 });
   } catch (e) {
@@ -69,11 +68,7 @@ export async function GET(req: Request) {
     const status = new URL(req.url).searchParams.get("status");
     const where: any = { userId: user.id };
     if (status && STATUSES.has(status)) where.status = status;
-    const videos = await (prisma as any).donationVideo.findMany({
-      where,
-      orderBy: { createdAt: "desc" },
-      take: 200,
-    });
+    const videos = await listVideos(user.id, status && STATUSES.has(status) ? status : null);
     return NextResponse.json({ videos });
   } catch (e) {
     console.error("GET /api/v1/donation-videos error:", e);
@@ -90,36 +85,24 @@ export async function PUT(req: Request) {
     if (!id) return NextResponse.json({ error: "id is required" }, { status: 400 });
 
     // owner-scoped so one creator can never moderate another's queue
-    const owned = await (prisma as any).donationVideo.findFirst({ where: { id, userId: user.id } });
+    // ⚠️ 這一次檢查涵蓋下面**全部**動作（approve/reject/played/delete）。
+    //    所以各分支的 where 只有 id 是正確的，不代表漏了檢查。
+    const owned = await ownedVideo(id, user.id);
     if (!owned) return NextResponse.json({ error: "not found" }, { status: 404 });
 
     if (body._meta === "approve") {
-      await (prisma as any).donationVideo.update({
-        where: { id },
-        data: { status: "approved", reviewedAt: new Date(), rejectNote: "" },
-      });
+      await approveVideo(id);
     } else if (body._meta === "reject") {
-      await (prisma as any).donationVideo.update({
-        where: { id },
-        data: {
-          status: "rejected",
-          reviewedAt: new Date(),
-          rejectNote: String(body.rejectNote || "").slice(0, 300),
-        },
-      });
+      await rejectVideo(id, String(body.rejectNote || "").slice(0, 300));
     } else if (body._meta === "played") {
-      await (prisma as any).donationVideo.update({ where: { id }, data: { status: "played" } });
+      await markPlayed(id);
     } else if (body._meta === "delete") {
-      await (prisma as any).donationVideo.delete({ where: { id } });
+      await deleteVideo(id);
     } else {
       return NextResponse.json({ error: "Unknown action" }, { status: 400 });
     }
 
-    const videos = await (prisma as any).donationVideo.findMany({
-      where: { userId: user.id },
-      orderBy: { createdAt: "desc" },
-      take: 200,
-    });
+    const videos = await listVideos(user.id);
     return NextResponse.json({ videos });
   } catch (e) {
     console.error("PUT /api/v1/donation-videos error:", e);

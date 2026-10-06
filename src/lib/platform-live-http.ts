@@ -109,3 +109,97 @@ export async function findPlatformConnection(
     [userId, platform],
   );
 }
+
+/**
+ * 建立/更新平台連線（對應 Prisma 的 upsert on userId_platform）。
+ *
+ * ⚠️ 這是「清除連線」路徑（connections 的 disconnect 分支）用的：
+ *    把 connected 關掉並清空所有 token 與 channel 欄位。
+ *
+ *    而 upsert 的語意是：**不存在就建立一個未連線的**。
+ *    那正是原 Prisma 版的行為 —— 對已存在的只更新，
+ *    對不存在的建立。保留它，因為「對不存在的 id 做 disconnect」
+ *    應該是無害的 no-op，而不是報錯。
+ *
+ *    ⚠️ 但注意：這裡的 where **只有 userId+platform**，沒有 id ——
+ *       所以「把某個 id 中斷」其實是「把 (userId, platform) 中斷」。
+ *       呼叫端傳的是 platform，所以等價。
+ */
+export async function upsertPlatformConnection(
+  userId: string,
+  platform: string,
+  data: {
+    connected: boolean;
+    accessToken: string | null;
+    refreshToken: string | null;
+    tokenExpiresAt: string | null;
+    channelId?: string | null;
+    channelName?: string | null;
+    channelAvatar?: string | null;
+  },
+): Promise<void> {
+  await query(
+    `INSERT INTO "PlatformConnection"
+       ("id","userId","platform","connected","accessToken","refreshToken","tokenExpiresAt",
+        "channelId","channelName","channelAvatar")
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+     ON CONFLICT ("userId","platform") DO UPDATE SET
+       "connected"      = EXCLUDED."connected",
+       "accessToken"    = EXCLUDED."accessToken",
+       "refreshToken"   = EXCLUDED."refreshToken",
+       "tokenExpiresAt" = EXCLUDED."tokenExpiresAt",
+       "channelId"      = EXCLUDED."channelId",
+       "channelName"    = EXCLUDED."channelName",
+       "channelAvatar"  = EXCLUDED."channelAvatar"`,
+    [
+      crypto.randomUUID(), userId, platform, data.connected,
+      data.accessToken, data.refreshToken, data.tokenExpiresAt,
+      data.channelId ?? null, data.channelName ?? null, data.channelAvatar ?? null,
+    ],
+  );
+}
+
+/**
+ * 依 id 寫回 channel 資訊（connections 路由的慢速重新整理路徑）。
+ *
+ * ⚠️ 這裡的 where **只有 id**，沒有 userId ——
+ *    而呼叫端是「先 findMany({userId}) 拿到自己的連線，再逐筆更新」。
+ *    所以 id 來自自己的查詢結果，不是來自請求。
+ *
+ *    這是繼承的形狀。若要更嚴，該把 userId 加進來；
+ *    但那會改變 API 契約（多一個參數），而目前呼叫端已確保來源安全。
+ */
+export async function saveChannelInfo(
+  id: string,
+  info: {
+    channelId?: string | null;
+    channelName?: string | null;
+    channelAvatar?: string | null;
+  },
+): Promise<void> {
+  const sets: string[] = [];
+  const params: unknown[] = [id];
+  for (const k of ['channelId', 'channelName', 'channelAvatar'] as const) {
+    if (info[k] !== undefined) {
+      params.push(info[k]);
+      sets.push(`"${k}" = $${params.length}`);
+    }
+  }
+  if (!sets.length) return;
+  await query(`UPDATE "PlatformConnection" SET ${sets.join(', ')} WHERE "id" = $1`, params);
+}
+
+/** 依 userId 取**所有**平台連線（含未連線的 —— connections 頁要顯示兩者）。 */
+export async function listAllPlatforms(
+  userId: string,
+): Promise<Array<PlatformConnRow & {
+  connected: boolean; channelName: string | null; channelAvatar: string | null;
+}>> {
+  return query<PlatformConnRow & { connected: boolean; channelName: string | null; channelAvatar: string | null }>(
+    `SELECT ${CONN_COLS}, "connected", "channelName", "channelAvatar"
+       FROM "PlatformConnection"
+      WHERE "userId" = $1
+      ORDER BY "platform" ASC`,
+    [userId],
+  );
+}
