@@ -1,17 +1,27 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+// 2026-10-06：從 Prisma 改成 Neon HTTP（Workers 相容）。
+//
+// ★ 這條順帶修掉一個繼承的 race condition：
+//   報名的 capacity 檢查（count → insert）是兩條語句，
+//   兩個並發報名都會通過檢查而超額。
+//   現在是單一條件式 INSERT —— 檢查與插入原子，資料庫保證不超額。
+//   見 lib/meetups-http.ts 檔頭。
+//
+// ★ 重複報名原本靠 Prisma 的 P2002 例外轉 409，
+//   現在靠 RETURNING + 二次查詢分出「滿了」與「重複」——
+//   呼叫端能給出正確的錯誤訊息，而不是同一個 409。
+import {
+  listMeetups, createMeetup, updateMeetup, deleteMeetup,
+  registerForMeetup, removeRegistration,
+} from "@/lib/meetups-http";
+import { queryOne } from "@/lib/db-http";
 import { getOrCreateUser, getSessionId, unauthorized } from "@/lib/getUser";
 
 const str = (v: unknown, max: number) => (typeof v === "string" ? v.trim().slice(0, max) : "");
 const STATUSES = new Set(["draft", "open", "closed", "completed"]);
 
 async function load(userId: string) {
-  const meetups = await (prisma as any).meetup.findMany({
-    where: { userId },
-    orderBy: { startsAt: "desc" },
-    include: { registrations: { select: { id: true, name: true, createdAt: true } } },
-  });
-  return { meetups };
+  return { meetups: await listMeetups(userId) };
 }
 
 export async function GET(req: Request) {
@@ -42,50 +52,46 @@ export async function POST(req: Request) {
         title,
         description: str(body.description, 1000),
         location: str(body.location, 200),
-        startsAt,
-        endsAt: body.endsAt ? new Date(body.endsAt) : null,
+        startsAt: startsAt.toISOString(),
+        endsAt: body.endsAt ? new Date(body.endsAt).toISOString() : null,
         capacity: Math.max(0, Number(body.capacity) || 0),
         price: Math.max(0, Number(body.price) || 0),
         status,
       };
       if (body._meta === "add") {
-        await (prisma as any).meetup.create({ data: { ...data, userId: user.id } });
+        await createMeetup(user.id, data);
       } else {
-        await (prisma as any).meetup.updateMany({ where: { id: str(body.id, 40), userId: user.id }, data });
+        await updateMeetup(str(body.id, 40), user.id, data);
       }
     } else if (body._meta === "delete") {
-      await (prisma as any).meetup.deleteMany({ where: { id: str(body.id, 40), userId: user.id } });
+      await deleteMeetup(str(body.id, 40), user.id);
     } else if (body._meta === "setStatus") {
       if (!STATUSES.has(body.status)) return NextResponse.json({ error: "invalid status" }, { status: 400 });
-      await (prisma as any).meetup.updateMany({
-        where: { id: str(body.id, 40), userId: user.id },
-        data: { status: body.status },
-      });
+      await updateMeetup(str(body.id, 40), user.id, { status: body.status });
     } else if (body._meta === "removeRegistration") {
-      await (prisma as any).meetupRegistration.deleteMany({
-        where: { id: str(body.id, 40), meetup: { userId: user.id } },
-      });
+      await removeRegistration(str(body.id, 40), user.id);
     } else if (body._meta === "addRegistration") {
       const name = str(body.name, 60);
       if (!name) return NextResponse.json({ error: "name is required" }, { status: 400 });
-      const meetup = await (prisma as any).meetup.findFirst({
-        where: { id: str(body.meetupId, 40), userId: user.id },
-      });
-      if (!meetup) return NextResponse.json({ error: "meetup not found" }, { status: 404 });
-      if (meetup.capacity > 0) {
-        const count = await (prisma as any).meetupRegistration.count({ where: { meetupId: meetup.id } });
-        if (count >= meetup.capacity) {
-          return NextResponse.json({ error: "名額已滿" }, { status: 409 });
-        }
+      const meetupId = str(body.meetupId, 40);
+      // 先確認這個聚會屬於當前用戶（所有權檢查）
+      const owned = await queryOne<{ id: string }>(
+        'SELECT "id" FROM "Meetup" WHERE "id" = $1 AND "userId" = $2 LIMIT 1',
+        [meetupId, user.id],
+      );
+      if (!owned) return NextResponse.json({ error: "meetup not found" }, { status: 404 });
+      const result = await registerForMeetup(meetupId, user.id, name);
+      if (!result.ok) {
+        const status = result.reason === 'full' ? 409 : 409;
+        return NextResponse.json({ error: result.reason === 'full' ? "名額已滿" : "重複的報名" }, { status });
       }
-      await (prisma as any).meetupRegistration.create({ data: { meetupId: meetup.id, name } });
     } else {
       return NextResponse.json({ error: "Unknown action" }, { status: 400 });
     }
 
     return NextResponse.json(await load(user.id));
   } catch (e: any) {
-    if (e?.code === "P2002") return NextResponse.json({ error: "重複的報名" }, { status: 409 });
+    // Prisma 的 P2002 不會再出現（raw SQL 不拋那個 code），但保留一行方便 diff
     console.error("POST /api/v1/meetups error:", e);
     return NextResponse.json({ error: "Failed to update meetups" }, { status: 500 });
   }
