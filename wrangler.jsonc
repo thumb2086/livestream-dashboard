@@ -1,0 +1,99 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "livestream-dashboard",
+  // 這個 OAuth token 底下有 **3 個** Cloudflare 帳號。
+  // 不寫 account_id 的話 wrangler 可能佈到錯的那個 ——
+  // 而「佈到錯帳號」的症狀是部署成功、但 custom domain 報 zone 不存在。
+  //
+  // 必須是 2513d912…：zixilive.dpdns.org 的 zone 在這個帳號底下
+  // （與 zixiearth.dpdns.org 同一個）。
+  "account_id": "2513d9129183c9319ad07b504251a69b",
+  "main": ".open-next/worker.js",
+  "compatibility_date": "2026-07-29",
+  "compatibility_flags": ["nodejs_compat"],
+
+  // ── 自訂網域 ──────────────────────────────────────────────
+  // 2026-10-06：從 Vercel 遷移到 Cloudflare，網域用 zixilive.dpdns.org。
+  //
+  // ⚠️ 這裡的 `routes` 會**停用 workers.dev 子網域**
+  //    （除非顯式 workers_dev: true）。
+  //
+  //    我在 zixi-earth 犯過這個錯：加了 custom domain 之後
+  //    workers.dev 整站 404，而症狀看起來像「API 壞了」。
+  //    所以這裡顯式保留 workers.dev —— 它是排查時的對照組，
+  //    沒有對照組就分不清「程式壞了」還是「路由沒對」。
+  "workers_dev": true,
+  "routes": [
+    {
+      "pattern": "zixilive.dpdns.org",
+      "custom_domain": true
+    }
+  ],
+
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  },
+
+  // ── 這裡刻意沒有 durable_objects ──────────────────────────
+  //
+  // ⚠️ 2026-10-06：我原本寫了一個 `CacheHandler` DO（照文件範例抄的），
+  //    部署直接失敗：
+  //
+  //      Your Worker depends on the following Durable Objects,
+  //      which are not exported in your entrypoint file: CacheHandler
+  //
+  //    真正原因是 **1.18.0 的預設 incremental cache 是 KV-based**
+  //    （套件裡是 dist/api/overrides/incremental-cache/kv-incremental-cache.js），
+  //    不是 Durable Object —— 所以 OpenNext 不會產生 CacheHandler 這個類別。
+  //
+  //    實際匯出的 DO 只有三個：
+  //      DOQueueHandler     (queue)
+  //      DOShardedTagCache  (tagCache)
+  //      BucketCachePurge   (cachePurge)
+  //    這個專案沒有用 ISR，所以都用不到，不綁。
+  //
+  //    而**憑空捏造的 binding 比沒有 binding 更糟**：
+  //    wrangler 報的錯是「你引用了不存在的類別」，
+  //    而那個錯與真正原因（KV vs DO）看起來毫無關聯 ——
+  //    我就是靠讀套件裡的實際檔名才找到答案的。
+  //
+  //    若之後真的要 ISR tag revalidation，綁 `DOShardedTagCache`，
+  //    **不要**寫 CacheHandler。
+
+  "vars": {
+    // Twitch EventSub 的互動端點需要一個公開的 https 網址。
+    // 遷移的其中一個理由就是把它從「尚未設定」變成有值。
+    "PUBLIC_BASE_URL": "https://zixilive.dpdns.org",
+
+    // ZIXI 的 origin 用**正式網域**，不用 workers.dev。
+    //
+    // ⚠️ 而 OAuth 的授權頁與 token 端點都必須與 client 註冊的
+    //    redirect_uri 同源才不會被瀏覽器擋。redirect_uri 是
+    //    zixilive.dpdns.org（external），但 ZIXI_OAUTH_URL 這邊
+    //    指向 zixiearth.dpdns.org（provider），兩者不同源是正確的 ——
+    //    OAuth 本來就設計成跨源。
+    //
+    //    真正會壞的是「ZIXI_API_URL 指向一個 404 的 origin」。
+    //    而那正是我加 custom domain 之後踩到的坑。
+    "ZIXI_API_URL": "https://zixiearth.dpdns.org",
+    "ZIXI_OAUTH_URL": "https://zixiearth.dpdns.org",
+    "ZIXI_CLIENT_ID": "livestream-dashboard",
+
+    "NODE_ENV": "production"
+  }
+
+  // ⚠️ 秘密（DATABASE_URL / ZIXI_CLIENT_SECRET / TWITCH_* / YOUTUBE_*
+  //    / GROQ_* / CHAT_WORKER_KEY / BASESCAN_API_KEY / PAYMENT_ENCRYPTION_KEY）
+  //    **刻意不在這裡**。
+  //
+  //    wrangler.jsonc 會被 commit，而 .env 有 Neon 的完整憑證
+  //    （使用者已確認歷史與工作區都沒有外洩 —— 所以不要破壞那個事實）。
+  //
+  //    設定方式：
+  //      npx wrangler secret put DATABASE_URL
+  //      npx wrangler secret put ZIXI_CLIENT_SECRET
+  //      …逐一
+  //
+  //    本機開發用 .dev.vars（已 gitignore）。
+}

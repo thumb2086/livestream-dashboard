@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
+import { zixiOAuthOrigin } from "@/lib/zixi-endpoints";
 
-const ZIXI_OAUTH_URL = process.env.ZIXI_OAUTH_URL || "https://zixi-casino.vercel.app";
+// 2026-10-06：原本 fallback 是 `https://zixi-casino.vercel.app` ——
+// 那是 zixi-casino（已拋棄）的**前端**網域，不是授權頁的服務端。
+// 而 OAuth 授權頁在 zixi-earth 的 Worker 上（/api/oauth/authorize）。
+// 單一來源見 lib/zixi-endpoints.ts。
+const ZIXI_OAUTH_URL = zixiOAuthOrigin();
 const ZIXI_CLIENT_ID = process.env.ZIXI_CLIENT_ID || "livestream-dashboard";
 
 export async function GET(req: NextRequest) {

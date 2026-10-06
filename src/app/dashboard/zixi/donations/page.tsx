@@ -75,7 +75,7 @@ export default function ZixiDonationsPage() {
                   {d.amount} {d.token}
                 </span>
                 {d.txHash && (
-                  <a href={`https://sepolia.basescan.org/tx/${d.txHash}`} target="_blank" rel="noopener noreferrer" className="text-[var(--ic-ink-tertiary)] hover:text-[var(--ic-ink)]">
+                  <a href={`https://sepolia.etherscan.io/tx/${d.txHash}`} target="_blank" rel="noopener noreferrer" className="text-[var(--ic-ink-tertiary)] hover:text-[var(--ic-ink)]">
                     <ExternalLink className="h-3.5 w-3.5" />
                   </a>
                 )}

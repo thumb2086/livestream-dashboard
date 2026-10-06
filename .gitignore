@@ -57,3 +57,9 @@ temp/
 
 # Local agent notes
 .opencode/
+# Cloudflare Workers / OpenNext (2026-10-06 migration from Vercel)
+# 沒有這些的話 build 產物會被 commit 進版控。
+.open-next/
+.wrangler/
+.dev.vars
+.dev.vars.*

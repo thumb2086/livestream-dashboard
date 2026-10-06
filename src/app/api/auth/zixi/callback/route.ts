@@ -1,8 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getSessionId } from "@/lib/getUser";
+import { zixiApiBase } from "@/lib/zixi-endpoints";
 
-const ZIXI_API_URL = process.env.ZIXI_API_URL || "https://zixi-casino-api.onrender.com/api/v1";
+// 2026-10-06：原本是 `|| "https://zixi-casino-api.onrender.com/api/v1"`。
+// 那台 Render 已經逾時（實測），而 .env.example 從來沒宣告 ZIXI_API_URL ——
+// 所以**每次部署都靜默使用死掉的 host**。
+// 現在走 lib/zixi-endpoints.ts 單一來源，預設指向實測活著的 workers.dev。
+// 詳見該檔案檔頭：問題不是網址舊了，是「舊網址是 fallback」。
+const ZIXI_API_URL = zixiApiBase();
 const ZIXI_CLIENT_ID = process.env.ZIXI_CLIENT_ID || "livestream-dashboard";
 const ZIXI_CLIENT_SECRET = process.env.ZIXI_CLIENT_SECRET || "";
 
