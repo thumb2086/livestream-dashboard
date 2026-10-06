@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+// 2026-10-06：從 Prisma 改成 Neon HTTP（Workers 相容）。
+import { findUserByUsername, upsertEventLog } from "@/lib/webhook-twitch-http";
 
 /**
  * Twitch EventSub webhook.
@@ -61,7 +62,7 @@ export async function POST(req: Request) {
   const username = new URL(req.url).searchParams.get("user");
   if (!username) return NextResponse.json({ error: "user query required" }, { status: 400 });
 
-  const owner = await (prisma as any).user.findUnique({ where: { username } });
+  const owner = await findUserByUsername(username);
   if (!owner) return NextResponse.json({ error: "creator not found" }, { status: 404 });
 
   const ev = body.event;
@@ -95,10 +96,18 @@ export async function POST(req: Request) {
 
   try {
     // Idempotent: Twitch redelivers, so ignore duplicates.
-    await (prisma as any).eventLog.upsert({
-      where: { platform_kind_externalId: { platform: "twitch", kind, externalId } },
-      create: data,
-      update: {},
+    await upsertEventLog({
+      userId: owner.id,
+      platform: "twitch",
+      kind,
+      externalId,
+      actorName: String(ev.user_name ?? ev.from_user_name ?? ev.display_name ?? ""),
+      actorId: String(ev.user_id ?? ev.from_user_id ?? ""),
+      message: String(ev.message ?? ""),
+      amount: Number(ev.amount ?? ev.viewer_count ?? 0) || 0,
+      tier: String(ev.tier ?? ""),
+      months: Number(ev.cumulative_months ?? ev.streak_months ?? 0) || 0,
+      payload: body,
     });
   } catch (e) {
     console.error("eventLog upsert failed:", e);

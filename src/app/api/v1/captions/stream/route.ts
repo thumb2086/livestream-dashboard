@@ -1,4 +1,4 @@
-import { prisma } from "@/lib/prisma";
+import { queryOne } from "@/lib/db-http";
 import { addClient } from "@/lib/caption-sse";
 import { getSubtitleSettings } from "@/lib/subtitle-config";
 
@@ -10,9 +10,10 @@ export async function GET(req: Request) {
   const token = searchParams.get("token");
   if (!token) return new Response("Missing token", { status: 400 });
 
-  const source = await prisma.oBSSource.findFirst({
-    where: { token, sourceKey: "captions" },
-  });
+  const source = await queryOne<{ userId: string; enabled: boolean }>(
+    'SELECT "userId", "enabled" FROM "OBSSource" WHERE "token" = $1 AND "sourceKey" = $2 LIMIT 1',
+    [token, "captions"],
+  );
   if (!source || !source.enabled) return new Response("Forbidden", { status: 403 });
 
   const userId = source.userId;

@@ -1,6 +1,11 @@
 import { timingSafeEqual as timingSafeEqualBuf } from "node:crypto";
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+// 2026-10-06：從 Prisma 改成 Neon HTTP（Workers 相容）。
+import {
+  findConnectionByPlatformAndChannel, clearChatMessages, createChatMessage,
+  listChatMessages,
+} from "@/lib/chat-messages-http";
+import { findPlatformConnection } from "@/lib/platform-live-http";
 import { getOrCreateUser, getSessionId, unauthorized } from "@/lib/getUser";
 import { runLiveCommand } from "@/lib/live-commands";
 
@@ -31,9 +36,7 @@ export async function POST(req: Request) {
       timingSafeEqual(presented, workerKey!);
 
     if (workerAuthed && body.channelName) {
-      const conn = await prisma.platformConnection.findFirst({
-        where: { platform: body.platform, channelName: body.channelName },
-      });
+      const conn = await findConnectionByPlatformAndChannel(body.platform, body.channelName);
       if (conn) userId = conn.userId;
     } else {
       const user = await getOrCreateUser(getSessionId(req));
@@ -63,21 +66,17 @@ export async function POST(req: Request) {
           { status: 400 }
         );
       }
-      const result = await prisma.chatMessage.deleteMany({
-        where: wipeAll ? { userId } : { userId, userName: { in: names } },
-      });
-      return NextResponse.json({ ok: true, cleared: result.count, scope: wipeAll ? "all" : "names" });
+      const cleared = await clearChatMessages(userId, wipeAll ? undefined : names);
+      return NextResponse.json({ ok: true, cleared, scope: wipeAll ? "all" : "names" });
     }
 
-    await prisma.chatMessage.create({
-      data: {
-        userId,
-        platform: body.platform,
-        userName: body.userName,
-        message: body.message,
-        avatarUrl: body.avatarUrl || "",
-        isOwner: body.isOwner || false,
-      },
+    await createChatMessage({
+      userId,
+      platform: body.platform,
+      userName: body.userName,
+      message: body.message,
+      avatarUrl: body.avatarUrl || "",
+      isOwner: body.isOwner || false,
     });
 
     // Every source funnels through this handler -- the chat worker and the
@@ -105,16 +104,10 @@ export async function GET(req: Request) {
     const since = searchParams.get("since");
 
     // Fetch stored messages
-    const where: any = { userId: user.id };
-    if (since) where.createdAt = { gt: new Date(since) };
-    const messages = await prisma.chatMessage.findMany({
-      where, orderBy: { createdAt: "asc" }, take: 100,
-    });
+    const messages = await listChatMessages(user.id, since || undefined, 100);
 
     // Try to fetch YouTube live chat if connected
-    const ytConn = await prisma.platformConnection.findUnique({
-      where: { userId_platform: { userId: user.id, platform: "youtube" } },
-    });
+    const ytConn = await findPlatformConnection(user.id, "youtube");
 
     if (ytConn?.connected && ytConn?.accessToken) {
       try {
@@ -137,8 +130,7 @@ export async function GET(req: Request) {
               for (const item of chatData.items || []) {
                 const pub = new Date(item.snippet.publishedAt);
                 if (pub > lastMsgTime) {
-                  await prisma.chatMessage.create({
-                    data: {
+                  await createChatMessage({
                       userId: user.id,
                       platform: "youtube",
                       userName: item.authorDetails.displayName,
@@ -146,8 +138,7 @@ export async function GET(req: Request) {
                       avatarUrl: item.authorDetails.profileImageUrl || "",
                       isOwner: item.authorDetails.isChatOwner || false,
                       createdAt: pub,
-                    },
-                  }).catch(() => {});
+                    }).catch(() => {});
                   messages.push({
                     id: "",
                     userId: user.id,

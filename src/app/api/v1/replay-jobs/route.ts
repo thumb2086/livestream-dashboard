@@ -1,5 +1,10 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+// 2026-10-06：從 Prisma 改成 Neon HTTP（Workers 相容）。
+// 原本 8 處全是 `(prisma as any)`。
+import {
+  listReplayJobs, countRunningJobs, createReplayJob, getReplayJob,
+  updateReplayJob, failReplayJob, deleteReplayJob, setReplayJobStatus,
+} from "@/lib/replay-jobs-http";
 import { getOrCreateUser, getSessionId, unauthorized } from "@/lib/getUser";
 import { advanceReplay } from "@/lib/replay-job";
 import { recordUsage } from "@/lib/usage";
@@ -8,12 +13,7 @@ const str = (v: unknown, max: number) => (typeof v === "string" ? v.trim().slice
 const STATUSES = new Set(["queued", "running", "completed", "failed"]);
 
 async function load(userId: string) {
-  const jobs = await (prisma as any).replayJob.findMany({
-    where: { userId },
-    orderBy: { createdAt: "desc" },
-    take: 50,
-    include: { segments: { orderBy: { startSec: "asc" } } },
-  });
+  const jobs = await listReplayJobs(userId, 50);
   return { jobs };
 }
 
@@ -43,43 +43,29 @@ export async function POST(req: Request) {
       if (!/^https?:\/\/.+/i.test(replayUrl)) {
         return NextResponse.json({ error: "replayUrl must be an http(s) URL" }, { status: 400 });
       }
-      const running = await (prisma as any).replayJob.count({
-        where: { userId: user.id, status: { in: ["queued", "running"] } },
-      });
+      const running = await countRunningJobs(user.id);
       if (running >= 3) {
         return NextResponse.json({ error: "同時最多 3 個分析工作" }, { status: 429 });
       }
-      await (prisma as any).replayJob.create({
-        data: {
-          userId: user.id,
-          title,
-          replayUrl,
-          language: str(body.language, 8) || "zh",
-          status: "queued",
-          progress: 0,
-        },
+      await createReplayJob(user.id, {
+        title, replayUrl, language: str(body.language, 8) || "zh",
       });
     } else if (body._meta === "advance") {
       // Runs the real pipeline one bounded step per call: fetch + decode the
       // audio, then transcribe and score it chunk by chunk. Progress reflects
       // work actually done -- the previous version only incremented a counter
       // and invented placeholder segments with made-up scores.
-      const job = await (prisma as any).replayJob.findFirst({
-        where: { id: str(body.id, 40), userId: user.id },
-      });
+      const job = await getReplayJob(user.id, str(body.id, 40));
       if (!job) return NextResponse.json({ error: "not found" }, { status: 404 });
       if (job.status === "completed") return NextResponse.json(await load(user.id));
 
       try {
         const result = await advanceReplay(job);
-        await (prisma as any).replayJob.update({
-          where: { id: job.id },
-          data: {
-            progress: result.progress,
-            status: result.status,
-            completedAt: result.status === "completed" ? new Date() : null,
-            summary: result.summary,
-          },
+        await updateReplayJob(job.id, {
+          progress: result.progress,
+          status: result.status,
+          completedAt: result.status === "completed" ? new Date().toISOString() : null,
+          summary: result.summary,
         });
 
         // Meter the step that actually ran. advanceReplay transcribes at most
@@ -88,20 +74,14 @@ export async function POST(req: Request) {
         // for work that did not finish.
         await recordUsage(user.id, "replay_minutes", 1, "replay analysis " + job.title.slice(0, 100));
       } catch (e: any) {
-        await (prisma as any).replayJob.update({
-          where: { id: job.id },
-          data: { status: "failed", summary: String(e?.message || e).slice(0, 300) },
-        });
+        await failReplayJob(job.id, String(e?.message || e).slice(0, 300));
         return NextResponse.json({ error: e?.message || "分析失敗" }, { status: 500 });
       }
     } else if (body._meta === "delete") {
-      await (prisma as any).replayJob.deleteMany({ where: { id: str(body.id, 40), userId: user.id } });
+      await deleteReplayJob(str(body.id, 40), user.id);
     } else if (body._meta === "setStatus") {
       if (!STATUSES.has(body.status)) return NextResponse.json({ error: "invalid status" }, { status: 400 });
-      await (prisma as any).replayJob.updateMany({
-        where: { id: str(body.id, 40), userId: user.id },
-        data: { status: body.status },
-      });
+      await setReplayJobStatus(str(body.id, 40), user.id, body.status);
     } else {
       return NextResponse.json({ error: "Unknown action" }, { status: 400 });
     }

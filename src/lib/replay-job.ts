@@ -1,5 +1,5 @@
 import { downloadAudio, transcribeRange, scoreSegment } from "./replay-analysis";
-import { prisma } from "./prisma";
+import { query, queryOne } from "./db-http";
 
 /** How many seconds of audio one `advance` call transcribes. */
 const SECONDS_PER_STEP = 60;
@@ -59,10 +59,11 @@ export function clearAudioCache() {
  * can be processed across several requests without holding an HTTP handler open.
  */
 export async function advanceReplay(job: Job): Promise<AdvanceResult> {
-  const segments: any[] = await (prisma as any).replaySegment.findMany({
-    where: { jobId: job.id },
-    orderBy: { startSec: "asc" },
-  });
+  const segments: any[] = await query(
+    `SELECT "id", "jobId", "startSec", "endSec", "transcript", "score", "hook", "peak"
+       FROM "ReplaySegment" WHERE "jobId" = $1 ORDER BY "startSec" ASC`,
+    [job.id],
+  );
 
   // Step 1: fetch and decode, so we learn the real duration before transcribing.
   const audio = await ensureAudio(job);
@@ -107,17 +108,11 @@ export async function advanceReplay(job: Job): Promise<AdvanceResult> {
   const index = segments.length;
   const { hook, peak, score } = scoreSegment(text, index, predicted);
 
-  await (prisma as any).replaySegment.create({
-    data: {
-      jobId: job.id,
-      startSec: Math.floor(startSec),
-      endSec: Math.floor(endSec),
-      transcript: text,
-      score,
-      hook,
-      peak,
-    },
-  });
+  await query(
+    `INSERT INTO "ReplaySegment" ("id","jobId","startSec","endSec","transcript","score","hook","peak")
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+    [crypto.randomUUID(), job.id, Math.floor(startSec), Math.floor(endSec), text, score, hook, peak],
+  );
 
   const done = endSec >= durationSec;
   return {

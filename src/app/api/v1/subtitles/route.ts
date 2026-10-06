@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+// 2026-10-06：從 Prisma 改成 Neon HTTP（Workers 相容）。
+import { ensureSubtitleConfig, upsertSubtitleConfig } from "@/lib/subtitle-config";
 import { getOrCreateUser, getSessionId, unauthorized } from "@/lib/getUser";
-import { ensureSubtitleConfig } from "@/lib/subtitle-config";
 
 const ALLOWED = new Set(["enabled", "font", "fontSize", "textColor", "bgColor", "position"]);
 
@@ -28,11 +28,7 @@ export async function PUT(req: Request) {
     for (const key of Object.keys(body)) {
       if (ALLOWED.has(key)) filtered[key] = body[key];
     }
-    const updated = await prisma.subtitleConfig.upsert({
-      where: { userId: user.id },
-      update: filtered,
-      create: { userId: user.id, ...filtered },
-    });
+    const updated = await upsertSubtitleConfig(user.id, filtered);
     return NextResponse.json(updated);
   } catch (e) {
     console.error("PUT /api/v1/subtitles error:", e);

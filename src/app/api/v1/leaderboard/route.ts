@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { query } from "@/lib/db-http";
 import { getOrCreateUser, getSessionId, unauthorized } from "@/lib/getUser";
 
 export async function GET(req: Request) {
@@ -17,11 +17,14 @@ export async function GET(req: Request) {
           ? new Date(now.getTime() - 30 * 24 * 3600 * 1000)
           : new Date(0);
 
-    const donations = await prisma.zixiDonation.findMany({
-      where: { userId: user.id, status: "confirmed", createdAt: { gte: since } },
-      orderBy: { createdAt: "desc" },
-      take: 500,
-    });
+    const donations = await query<{ donorAddress: string; donorName: string; amount: number }>(
+      `SELECT "donorAddress", "donorName", "amount"
+         FROM "ZixiDonation"
+        WHERE "userId" = $1 AND "status" = 'confirmed' AND "createdAt" >= $2
+        ORDER BY "createdAt" DESC
+        LIMIT 500`,
+      [user.id, since.toISOString()],
+    );
 
     const totals = new Map<string, { name: string; amount: number; count: number }>();
     for (const d of donations) {

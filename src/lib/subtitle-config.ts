@@ -1,4 +1,4 @@
-import { prisma } from "./prisma";
+import { queryOne } from "./db-http";
 
 /**
  * Subtitle appearance defaults.
@@ -28,7 +28,10 @@ export type SubtitleSettings = {
 
 /** Reads the creator's settings, falling back to the defaults above. */
 export async function getSubtitleSettings(userId: string): Promise<SubtitleSettings> {
-  const row = await prisma.subtitleConfig.findUnique({ where: { userId } });
+  const row = await queryOne<{ font: string; fontSize: string; textColor: string; bgColor: string; position: string; enabled: boolean }>(
+    'SELECT "font", "fontSize", "textColor", "bgColor", "position", "enabled" FROM "SubtitleConfig" WHERE "userId" = $1 LIMIT 1',
+    [userId],
+  );
   if (!row) return { ...SUBTITLE_DEFAULTS };
   return {
     font: row.font,
@@ -45,9 +48,30 @@ export async function getSubtitleSettings(userId: string): Promise<SubtitleSetti
  * first page load persists a real record instead of leaving the table empty.
  */
 export async function ensureSubtitleConfig(userId: string) {
-  return prisma.subtitleConfig.upsert({
-    where: { userId },
-    update: {},
-    create: { userId },
-  });
+  return queryOne(
+    `INSERT INTO "SubtitleConfig" ("id","userId") VALUES ($1,$2)
+     ON CONFLICT ("userId") DO NOTHING
+     RETURNING *`,
+    [crypto.randomUUID(), userId],
+  );
+}
+
+/** Upserts the creator's subtitle settings (only the fields present). */
+export async function upsertSubtitleConfig(userId: string, data: Record<string, unknown>) {
+  const sets: string[] = [];
+  const params: unknown[] = [userId];
+  const fields = ["enabled", "font", "fontSize", "textColor", "bgColor", "position"] as const;
+  for (const k of fields) {
+    if (data[k] !== undefined) {
+      params.push(k === "enabled" ? Boolean(data[k]) : String(data[k] ?? ""));
+      sets.push(`"${k}" = EXCLUDED."${k}"`);
+    }
+  }
+  return queryOne(
+    `INSERT INTO "SubtitleConfig" ("id","userId"${Object.keys(data).length ? ", " + fields.filter((k) => data[k] !== undefined).map((k) => '"' + k + '"').join(", ") : ""})
+     VALUES ($1, $2${Object.keys(data).length ? ", " + fields.filter((k) => data[k] !== undefined).map((_, i) => "$" + (i + 3)).join(", ") : ""})
+     ON CONFLICT ("userId") DO UPDATE SET ${sets.length ? sets.join(", ") : "\x22id\x22 = \x22id\x22"}
+     RETURNING *`,
+    [crypto.randomUUID(), userId, ...params.slice(1)],
+  );
 }

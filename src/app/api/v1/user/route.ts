@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+// 2026-10-06：從 Prisma 改成 Neon HTTP（Workers 相容）。
+import { queryOne } from "@/lib/db-http";
 import { getOrCreateUser, getSessionId, unauthorized } from "@/lib/getUser";
 
 // Only user-editable profile fields. Server-computed (chosenPlan, totals, followers,
@@ -78,10 +79,10 @@ export async function PATCH(req: Request) {
     for (const key of Object.keys(body)) {
       if (ALLOWED.has(key)) filtered[key] = body[key];
     }
-    const updated = await prisma.user.update({
-      where: { id: user.id },
-      data: filtered,
-    });
+    const updated = await queryOne(
+      `UPDATE "User" SET ${Object.keys(filtered).map((k, i) => `"${k}" = $${i + 2}`).join(", ")} WHERE "id" = $1 RETURNING *`,
+      [user.id, ...Object.values(filtered)],
+    );
     return NextResponse.json(publicUser(updated as any));
   } catch (e) {
     console.error("PATCH /api/v1/user error:", e);

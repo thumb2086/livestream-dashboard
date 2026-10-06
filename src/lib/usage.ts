@@ -1,4 +1,4 @@
-import { prisma } from "@/lib/prisma";
+import { query, queryOne } from "@/lib/db-http";
 import { QUOTAS, effectivePlan } from "@/lib/plans";
 
 /**
@@ -29,11 +29,13 @@ function periodStart(): Date {
 
 /** Total already consumed for a metric in the current period. */
 export async function usedThisPeriod(userId: string, metric: string): Promise<number> {
-  const row = await (prisma as any).usageEvent.aggregate({
-    where: { userId, metric, createdAt: { gte: periodStart() } },
-    _sum: { quantity: true },
-  });
-  return row?._sum?.quantity ?? 0;
+  const row = await queryOne<{ quantity: string }>(
+    `SELECT COALESCE(SUM("quantity"), 0)::text AS quantity
+       FROM "UsageEvent"
+      WHERE "userId" = $1 AND "metric" = $2 AND "createdAt" >= $3`,
+    [userId, metric, periodStart().toISOString()],
+  );
+  return row ? Number(row.quantity) || 0 : 0;
 }
 
 /**
@@ -54,14 +56,11 @@ export async function recordUsage(
   const qty = Math.max(0, Math.min(MAX_QTY, Number(quantity.toFixed(PRECISION))));
   if (!qty) return;
   try {
-    await (prisma as any).usageEvent.create({
-      data: {
-        userId,
-        metric: metric.slice(0, 40),
-        quantity: qty,
-        note: String(note).slice(0, 120),
-      },
-    });
+    await query(
+      `INSERT INTO "UsageEvent" ("id","userId","metric","quantity","note","createdAt")
+       VALUES ($1,$2,$3,$4,$5,NOW())`,
+      [crypto.randomUUID(), userId, metric.slice(0, 40), qty, String(note).slice(0, 120)],
+    );
     // Keep the memoised total consistent with what we just wrote, otherwise the
     // next admission check would under-count our own consumption for the TTL.
     // Only bump an existing entry: seeding a fresh one with just this delta
@@ -131,7 +130,10 @@ async function cachedUsed(userId: string, metric: string): Promise<number> {
  * a feature.
  */
 export async function checkQuota(userId: string, metric: string, want: number): Promise<QuotaCheck> {
-  const sub = await (prisma as any).subscription.findUnique({ where: { userId } });
+  const sub = await queryOne<{ planKey?: string; billingMode?: string; status?: string; currentPeriodEnd?: string | null }>(
+    'SELECT "planKey", "billingMode", "status", "currentPeriodEnd" FROM "Subscription" WHERE "userId" = $1 LIMIT 1',
+    [userId],
+  );
   const plan = effectivePlan(sub);
   const q = (QUOTAS[plan] ?? QUOTAS.free).find((x) => x.metric === metric);
   if (!q) return { allowed: true, limit: Number.MAX_SAFE_INTEGER, used: 0, unmetered: true };

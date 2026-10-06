@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+// 2026-10-06：從 Prisma 改成 Neon HTTP（Workers 相容）。
+import { findPlatformConnection } from "@/lib/platform-live-http";
 import { getOrCreateUser, getSessionId, unauthorized } from "@/lib/getUser";
 import { subscribeEvents, deleteAllSubscriptions, listSubscriptions, getAppAccessToken } from "@/lib/twitch-eventsub";
 
@@ -17,10 +18,8 @@ export async function GET(req: Request) {
     const user = await getOrCreateUser(getSessionId(req));
     if (!user) return unauthorized();
 
-    const conn = await prisma.platformConnection.findFirst({
-      where: { userId: user.id, platform: "twitch", connected: true },
-    });
-    if (!conn?.channelId) {
+    const conn = await findPlatformConnection(user.id, "twitch");
+    if (!conn?.channelId || !conn.connected) {
       return NextResponse.json({ error: "尚未連線 Twitch，或尚未取得 channel id" }, { status: 400 });
     }
 
@@ -50,18 +49,14 @@ export async function POST(req: Request) {
     const body = await req.json().catch(() => ({}));
 
     if (body._meta === "removeAll") {
-      const conn = await prisma.platformConnection.findFirst({
-        where: { userId: user.id, platform: "twitch", connected: true },
-      });
-      if (!conn?.channelId) return NextResponse.json({ error: "尚未連線 Twitch" }, { status: 400 });
+      const conn = await findPlatformConnection(user.id, "twitch");
+      if (!conn?.channelId || !conn.connected) return NextResponse.json({ error: "尚未連線 Twitch" }, { status: 400 });
       const removed = await deleteAllSubscriptions(conn.channelId);
       return NextResponse.json({ removed });
     }
 
-    const conn = await prisma.platformConnection.findFirst({
-      where: { userId: user.id, platform: "twitch", connected: true },
-    });
-    if (!conn?.channelId) {
+    const conn = await findPlatformConnection(user.id, "twitch");
+    if (!conn?.channelId || !conn.connected) {
       return NextResponse.json({ error: "尚未連線 Twitch，或尚未取得 channel id" }, { status: 400 });
     }
 

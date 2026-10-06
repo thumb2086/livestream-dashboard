@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+// 2026-10-06：從 Prisma 改成 Neon HTTP（Workers 相容）。
+import { getPaymentSetting, upsertPaymentSetting } from "@/lib/payment-settings-http";
 import { getOrCreateUser, getSessionId, unauthorized } from "@/lib/getUser";
 import { encryptSecretForStorage } from "@/lib/secret-crypto";
 
@@ -25,7 +26,7 @@ export async function GET(req: Request) {
   try {
     const user = await getOrCreateUser(getSessionId(req));
     if (!user) return unauthorized();
-    const row = await (prisma as any).paymentSetting.findUnique({ where: { userId: user.id } });
+    const row = await getPaymentSetting(user.id);
     return NextResponse.json({ settings: publicView(row) });
   } catch (e) {
     console.error("GET /api/v1/payment-settings error:", e);
@@ -56,11 +57,7 @@ export async function PUT(req: Request) {
       if (v) data[field] = encryptSecretForStorage(v);
     }
 
-    const row = await (prisma as any).paymentSetting.upsert({
-      where: { userId: user.id },
-      create: { userId: user.id, ...data },
-      update: data,
-    });
+    const row = await upsertPaymentSetting(user.id, data);
 
     return NextResponse.json({ settings: publicView(row) });
   } catch (e) {

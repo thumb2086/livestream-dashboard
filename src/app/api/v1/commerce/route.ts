@@ -1,13 +1,18 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+// 2026-10-06：從 Prisma 改成 Neon HTTP（Workers 相容）。
+// 原本 7 處全是 `(prisma as any)`。
+import {
+  listProducts, listOrders, createProduct, updateProduct,
+  deleteProduct, setOrderStatus, deleteOrder,
+} from "@/lib/commerce-http";
 import { getOrCreateUser, getSessionId, unauthorized } from "@/lib/getUser";
 
 const str = (v: unknown, max: number) => (typeof v === "string" ? v.trim().slice(0, max) : "");
 
 async function load(userId: string) {
   const [products, orders] = await Promise.all([
-    (prisma as any).product.findMany({ where: { userId }, orderBy: [{ sortOrder: "asc" }, { createdAt: "desc" }] }),
-    (prisma as any).order.findMany({ where: { userId }, orderBy: { createdAt: "desc" }, take: 200 }),
+    listProducts(userId),
+    listOrders(userId, 200),
   ]);
   return { products, orders };
 }
@@ -44,20 +49,20 @@ export async function POST(req: Request) {
         sortOrder: Number(body.sortOrder) || 0,
       };
       if (body._meta === "addProduct") {
-        await (prisma as any).product.create({ data: { ...data, userId: user.id } });
+        await createProduct(user.id, data);
       } else {
-        await (prisma as any).product.updateMany({ where: { id: str(body.id, 40), userId: user.id }, data });
+        await updateProduct(str(body.id, 40), user.id, data);
       }
     } else if (body._meta === "deleteProduct") {
-      await (prisma as any).product.deleteMany({ where: { id: str(body.id, 40), userId: user.id } });
+      await deleteProduct(str(body.id, 40), user.id);
     } else if (body._meta === "setOrderStatus") {
       const status = str(body.status, 20);
       if (!["pending", "paid", "shipped", "cancelled"].includes(status)) {
         return NextResponse.json({ error: "invalid status" }, { status: 400 });
       }
-      await (prisma as any).order.updateMany({ where: { id: str(body.id, 40), userId: user.id }, data: { status } });
+      await setOrderStatus(str(body.id, 40), user.id, status);
     } else if (body._meta === "deleteOrder") {
-      await (prisma as any).order.deleteMany({ where: { id: str(body.id, 40), userId: user.id } });
+      await deleteOrder(str(body.id, 40), user.id);
     } else {
       return NextResponse.json({ error: "Unknown action" }, { status: 400 });
     }

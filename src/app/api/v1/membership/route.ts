@@ -1,5 +1,10 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+// 2026-10-06：從 Prisma 改成 Neon HTTP（Workers 相容）。
+// 原本 8 處全是 `(prisma as any)`，讓掃描器一度判定「零 Prisma」（同一課題）。
+import {
+  getSubscription, listUsageEvents, listInvoices, countOverlays, getAccount,
+  upsertSubscription, createInvoice,
+} from "@/lib/membership-http";
 import { getOrCreateUser, getSessionId, unauthorized } from "@/lib/getUser";
 import { PLANS, QUOTAS, effectivePlan } from "@/lib/plans";
 import { invalidateQuota } from "@/lib/usage";
@@ -15,21 +20,11 @@ export { effectivePlan };
 
 async function load(userId: string) {
   const [subscription, usage, invoices, account, overlays] = await Promise.all([
-    (prisma as any).subscription.findUnique({ where: { userId } }),
-    (prisma as any).usageEvent.findMany({
-      where: { userId },
-      orderBy: { createdAt: "desc" },
-      take: 200,
-    }),
-    (prisma as any).invoice.findMany({ where: { userId }, orderBy: { issuedAt: "desc" }, take: 100 }),
-    (prisma as any).user.findUnique({
-      where: { id: userId },
-      select: { name: true, username: true, email: true, avatar: true },
-    }),
-    // `overlay` is a concurrency ceiling, not a weekly consumption metric: an
-    // account holds N browser sources at once. Counting it from usageEvent would
-    // show 0 forever, so it is measured here instead.
-    (prisma as any).oBSSource.count({ where: { userId } }),
+    getSubscription(userId),
+    listUsageEvents(userId, 200),
+    listInvoices(userId, 100),
+    getAccount(userId),
+    countOverlays(userId),
   ]);
 
   const planKey = effectivePlan(subscription);
@@ -104,46 +99,33 @@ export async function POST(req: Request) {
       if (billingMode === "yearly") periodEnd.setFullYear(periodEnd.getFullYear() + 1);
       else periodEnd.setMonth(periodEnd.getMonth() + 1);
 
-      await (prisma as any).subscription.upsert({
-        where: { userId: user.id },
-        create: {
-          userId: user.id,
-          planKey,
-          billingMode,
-          status,
-          currentPeriodEnd: planKey === "free" ? null : periodEnd,
-        },
-        update: {
-          planKey,
-          billingMode,
-          status,
-          currentPeriodEnd: planKey === "free" ? null : periodEnd,
-        },
+      await upsertSubscription(user.id, {
+        planKey,
+        billingMode,
+        status,
+        currentPeriodEnd: planKey === "free" ? null : periodEnd.toISOString(),
       });
-
-      // The ceiling just changed, so any memoised admission check for this
-      // account would hand out the old plan's headroom for up to its TTL.
       invalidateQuota(user.id);
 
       if (planKey !== "free" && status === "pending") {
         const n = Date.now().toString(36).toUpperCase();
-        await (prisma as any).invoice.create({
-          data: {
-            userId: user.id,
-            number: `SF-${new Date().getFullYear()}-${n}`,
-            amount: billingMode === "yearly" ? plan.yearly : plan.monthly,
-            tax: Math.round((billingMode === "yearly" ? plan.yearly : plan.monthly) * 0.05),
-            status: "pending",
-            period: new Date().toISOString().slice(0, 7),
-          },
+        await createInvoice({
+          userId: user.id,
+          number: `SF-${new Date().getFullYear()}-${n}`,
+          amount: billingMode === "yearly" ? plan.yearly : plan.monthly,
+          tax: Math.round((billingMode === "yearly" ? plan.yearly : plan.monthly) * 0.05),
+          status: "pending",
+          period: new Date().toISOString().slice(0, 7),
         });
       }
     } else if (body._meta === "cancel") {
-      await (prisma as any).subscription.upsert({
-        where: { userId: user.id },
-        create: { userId: user.id, planKey: "free", status: "active" },
-        update: { planKey: "free", status: "active", currentPeriodEnd: null },
+      await upsertSubscription(user.id, {
+        planKey: "free",
+        billingMode: "monthly",
+        status: "active",
+        currentPeriodEnd: null,
       });
+      invalidateQuota(user.id);
     } else if (body._meta === "payInvoice") {
       // Deliberately not implemented. Marking an invoice paid on request meant
       // anyone could POST their own id and receive a paid plan; only a verified

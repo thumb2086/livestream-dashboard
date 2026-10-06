@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+// 2026-10-06：從 Prisma 改成 Neon HTTP（Workers 相容）。
+import { getLastZixiDonationWithHash, createZixiDonation } from "@/lib/zixi-donations-http";
 import { getOrCreateUser, getSessionId, unauthorized } from "@/lib/getUser";
 import { zixiApiBase } from "@/lib/zixi-endpoints";
 
@@ -24,10 +25,7 @@ export async function POST(req: Request) {
     if (!user.zixiWallet) return NextResponse.json({ error: "No ZIXI wallet configured" }, { status: 400 });
 
     const newDonations: any[] = [];
-    const lastDonation = await prisma.zixiDonation.findFirst({
-      where: { userId: user.id, txHash: { not: null } },
-      orderBy: { createdAt: "desc" },
-    });
+    const lastDonation = await getLastZixiDonationWithHash(user.id);
     const seenHashes = new Set(lastDonation?.txHash ? [lastDonation.txHash] : []);
 
     // 1. Try ZIXI API (internal custody transactions)
@@ -42,10 +40,17 @@ export async function POST(req: Request) {
           const hash = tx.txHash || tx.id;
           if (seenHashes.has(hash)) continue;
           seenHashes.add(hash);
-          const donation = await prisma.zixiDonation.create({
-            data: { userId: user.id, donorAddress: tx.from || "", amount: Math.abs(tx.amount || 0), token: tx.token === "YJC" ? "YJC" : "ZXC", txHash: hash, status: "confirmed" },
-          });
-          newDonations.push(donation);
+          const donation = await createZixiDonation({
+              userId: user.id,
+              donorAddress: tx.from || "",
+              donorName: "",
+              amount: Math.abs(tx.amount || 0),
+              token: tx.token === "YJC" ? "YJC" : "ZXC",
+              message: "",
+              status: "confirmed",
+              txHash: hash,
+            });
+            newDonations.push(donation);
         }
       }
     } catch { /* ZIXI API may be unavailable */ }
@@ -75,8 +80,15 @@ export async function POST(req: Request) {
               if (seenHashes.has(tx.hash)) continue;
               const amount = parseFloat(tx.value) / 1e18;
               if (amount <= 0) continue;
-              await prisma.zixiDonation.create({
-                data: { userId: user.id, donorAddress: tx.from || "", amount, token, txHash: tx.hash, status: "confirmed" },
+              await createZixiDonation({
+                userId: user.id,
+                donorAddress: tx.from || "",
+                donorName: "",
+                amount,
+                token,
+                message: "",
+                status: "confirmed",
+                txHash: tx.hash,
               });
               newDonations.push({ from: tx.from, amount, token });
             }

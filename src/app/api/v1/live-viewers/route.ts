@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { query } from "@/lib/db-http";
 import { getOrCreateUser, getSessionId, unauthorized } from "@/lib/getUser";
 import { getLiveViewers, invalidateViewerCache } from "@/lib/platform-live";
 
@@ -20,17 +20,19 @@ export async function GET(req: Request) {
     invalidateViewerCache(user.id);
     const viewers = await getLiveViewers(user.id);
 
-    const conns = await prisma.platformConnection.findMany({
-      where: { userId: user.id },
-      select: {
-        platform: true,
-        connected: true,
-        channelName: true,
-        liveViewers: true,
-        liveUpdatedAt: true,
-        tokenExpiresAt: true,
-      },
-    });
+    const conns = await query<{
+      platform: string;
+      connected: boolean;
+      channelName: string | null;
+      liveViewers: number | null;
+      liveUpdatedAt: string | null;
+      tokenExpiresAt: string | null;
+    }>(
+      `SELECT "platform", "connected", "channelName", "liveViewers", "liveUpdatedAt", "tokenExpiresAt"
+         FROM "PlatformConnection"
+        WHERE "userId" = $1`,
+      [user.id],
+    );
 
     return NextResponse.json({
       viewers,
@@ -42,7 +44,7 @@ export async function GET(req: Request) {
         liveViewers: c.liveViewers,
         liveUpdatedAt: c.liveUpdatedAt,
         // Surface an expired token instead of letting every platform call fail quietly.
-        tokenExpired: c.tokenExpiresAt !== null && c.tokenExpiresAt.getTime() <= Date.now(),
+        tokenExpired: c.tokenExpiresAt !== null && new Date(c.tokenExpiresAt).getTime() <= Date.now(),
       })),
     });
   } catch (e) {

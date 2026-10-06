@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+// 2026-10-06：從 Prisma 改成 Neon HTTP（Workers 相容）。
+import { getFeatureSettings, saveFeatureSettings } from "@/lib/features-http";
 import { getOrCreateUser, getSessionId, unauthorized } from "@/lib/getUser";
 
 /**
@@ -41,10 +42,8 @@ export async function GET(req: Request, ctx: Ctx) {
     const { key } = await ctx.params;
     if (!isValidKey(key)) return NextResponse.json({ error: "Unknown feature key" }, { status: 400 });
 
-    const row = await (prisma as any).featureSettings.findUnique({
-      where: { userId_featureKey: { userId: user.id, featureKey: key } },
-    });
-    return NextResponse.json({ settings: row?.settings ?? {} });
+    const row = await getFeatureSettings(user.id, key);
+    return NextResponse.json({ settings: row ?? {} });
   } catch (e) {
     console.error("GET /api/v1/features/[key] error:", e);
     return NextResponse.json({ error: "Failed to fetch settings" }, { status: 500 });
@@ -69,12 +68,8 @@ export async function PUT(req: Request, ctx: Ctx) {
       return NextResponse.json({ error: "settings too large (64KB limit)" }, { status: 413 });
     }
 
-    const row = await (prisma as any).featureSettings.upsert({
-      where: { userId_featureKey: { userId: user.id, featureKey: key } },
-      create: { userId: user.id, featureKey: key, settings: body.settings },
-      update: { settings: body.settings },
-    });
-    return NextResponse.json({ settings: row.settings });
+    await saveFeatureSettings(user.id, key, body.settings as Record<string, unknown>);
+    return NextResponse.json({ settings: body.settings });
   } catch (e) {
     console.error("PUT /api/v1/features/[key] error:", e);
     return NextResponse.json({ error: "Failed to save settings" }, { status: 500 });

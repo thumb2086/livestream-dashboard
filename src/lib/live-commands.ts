@@ -1,4 +1,4 @@
-import { prisma } from "@/lib/prisma";
+import { query, queryOne } from "@/lib/db-http";
 
 /**
  * Live command evaluation.
@@ -50,12 +50,14 @@ export async function matchCommand(
   const text = (message ?? "").trim();
   if (!text || text.length > MAX_MESSAGE_LEN) return null;
 
-  const rows = await (prisma as any).liveCommand.findMany({
-    where: { userId, enabled: true },
-    orderBy: [{ sortOrder: "asc" }, { trigger: "asc" }],
-    take: MAX_TRIGGERS,
-    select: { id: true, trigger: true, response: true },
-  });
+  const rows = await query<{ id: string; trigger: string; response: string }>(
+    `SELECT "id", "trigger", "response"
+       FROM "LiveCommand"
+      WHERE "userId" = $1 AND "enabled" = true
+      ORDER BY "sortOrder" ASC, "trigger" ASC
+      LIMIT $2`,
+    [userId, MAX_TRIGGERS],
+  );
 
   const lower = text.toLowerCase();
   for (const row of rows) {
@@ -93,17 +95,11 @@ export async function runLiveCommand(
     const match = await matchCommand(userId, args.message, args.isOwner === true);
     if (!match || !match.response.trim()) return null;
 
-    await (prisma as any).chatMessage.create({
-      data: {
-        userId,
-        platform: args.platform,
-        // Rendered as the creator speaking in the chat overlay.
-        userName: "指令",
-        message: match.response,
-        avatarUrl: "",
-        isOwner: true,
-      },
-    });
+    await query(
+      `INSERT INTO "ChatMessage" ("id","userId","platform","userName","message","avatarUrl","isOwner","createdAt")
+       VALUES ($1,$2,$3,$4,$5,$6,$7,NOW())`,
+      [crypto.randomUUID(), userId, args.platform, "指令", match.response, "", true],
+    );
     return { trigger: match.trigger, response: match.response };
   } catch (e) {
     console.error("[live-command] failed", e);

@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+// 2026-10-06：從 Prisma 改成 Neon HTTP（Workers 相容）。
+import { listAllPlatforms, saveChannelInfo } from "@/lib/platform-live-http";
+import { updateUserProfile } from "@/lib/account-http";
 import { getOrCreateUser, getSessionId, unauthorized } from "@/lib/getUser";
 
 export async function GET(req: Request) {
@@ -8,7 +10,8 @@ export async function GET(req: Request) {
     if (!user) return unauthorized();
 
     let twitchFol = 0, ytSubs = 0;
-    const conns = await prisma.platformConnection.findMany({ where: { userId: user.id, connected: true } });
+    const conns = await listAllPlatforms(user.id);
+    const connectedConns = conns.filter((c) => c.connected);
 
     /**
      * Per-source outcome. A platform that is not connected, has no token, or
@@ -17,7 +20,7 @@ export async function GET(req: Request) {
      */
     const sources: { platform: string; connected: boolean; known: boolean; count: number; channelName: string | null; detail: string | null }[] = [];
 
-    for (const conn of conns) {
+    for (const conn of connectedConns) {
       const base = { platform: conn.platform, connected: true, channelName: conn.channelName, count: 0, detail: null as string | null };
       if (!conn.accessToken) {
         sources.push({ ...base, known: false, detail: "尚未取得存取權杖" });
@@ -33,7 +36,14 @@ export async function GET(req: Request) {
               headers: { "Content-Type": "application/x-www-form-urlencoded" },
               body: new URLSearchParams({ client_id: process.env.YOUTUBE_CLIENT_ID || "", client_secret: process.env.YOUTUBE_CLIENT_SECRET || "", refresh_token: conn.refreshToken, grant_type: "refresh_token" }),
             });
-            if (r.ok) { const td: any = await r.json(); token = td.access_token; await prisma.platformConnection.update({ where: { id: conn.id }, data: { accessToken: token, tokenExpiresAt: new Date(Date.now() + (td.expires_in || 3600) * 1000) } }); }
+            if (r.ok) {
+              const td: any = await r.json();
+              token = td.access_token;
+              await saveChannelInfo(conn.id, {
+                accessToken: token,
+                tokenExpiresAt: new Date(Date.now() + (td.expires_in || 3600) * 1000).toISOString(),
+              });
+            }
           }
           const res = await fetch("https://www.googleapis.com/youtube/v3/channels?part=statistics&mine=true", {
             headers: { Authorization: `Bearer ${token}` },
@@ -65,14 +75,14 @@ export async function GET(req: Request) {
 
     // Platforms the creator has not connected at all.
     for (const p of ["twitch", "youtube"]) {
-      if (!conns.some((c) => c.platform === p)) {
+      if (!connectedConns.some((c) => c.platform === p)) {
         sources.push({ platform: p, connected: false, known: false, count: 0, channelName: null, detail: "尚未串接" });
       }
     }
 
     const total = twitchFol + ytSubs;
     if (total > 0 && total !== user.followers) {
-      await prisma.user.update({ where: { id: user.id }, data: { followers: total } });
+      await updateUserProfile(user.id, { followers: total });
     }
 
     return NextResponse.json({ followers: total, twitch: twitchFol, youtube: ytSubs, sources });

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+// 2026-10-06：從 Prisma 改成 Neon HTTP（Workers 相容）。
+import { listDonationRecords, listZixiDonationsForRecords } from "@/lib/donation-records-http";
 import { getOrCreateUser, getSessionId, unauthorized } from "@/lib/getUser";
 
 /**
@@ -26,18 +27,10 @@ export async function GET(req: Request) {
 
     const [zixi, card] = await Promise.all([
       wantZixi
-        ? (prisma as any).zixiDonation.findMany({
-            where: sinceDate ? { userId: user.id, createdAt: { gte: sinceDate } } : { userId: user.id },
-            orderBy: { createdAt: "desc" },
-            take: limit,
-          })
+        ? listZixiDonationsForRecords(user.id, sinceDate, limit)
         : Promise.resolve([]),
       wantCard
-        ? (prisma as any).donationRecord.findMany({
-            where: sinceDate ? { userId: user.id, createdAt: { gte: sinceDate } } : { userId: user.id },
-            orderBy: { createdAt: "desc" },
-            take: limit,
-          })
+        ? listDonationRecords(user.id, sinceDate, limit)
         : Promise.resolve([]),
     ]);
 

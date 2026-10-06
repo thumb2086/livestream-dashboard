@@ -1,6 +1,7 @@
 import { timingSafeEqual as timingSafeEqualBuf } from "node:crypto";
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+// 2026-10-06：從 Prisma 改成 Neon HTTP（Workers 相容）。
+import { queryOne } from "@/lib/db-http";
 import { getOrCreateUser, getSessionId, unauthorized } from "@/lib/getUser";
 
 /**
@@ -37,10 +38,10 @@ const timingSafeEqual = (a: string, b: string) =>
  * visitor's.
  */
 async function callerToken(userId: string): Promise<string | null> {
-  const user = await (prisma as any).user.findUnique({
-    where: { id: userId },
-    select: { zixiAccessToken: true, zixiTokenExpiresAt: true },
-  });
+  const user = await queryOne<{ zixiAccessToken: string | null; zixiTokenExpiresAt: string | null }>(
+    'SELECT "zixiAccessToken", "zixiTokenExpiresAt" FROM "User" WHERE "id" = $1 LIMIT 1',
+    [userId],
+  );
   const token: string | null = user?.zixiAccessToken ?? null;
   if (!token) return null;
   const expires = user?.zixiTokenExpiresAt ? new Date(user.zixiTokenExpiresAt) : null;
