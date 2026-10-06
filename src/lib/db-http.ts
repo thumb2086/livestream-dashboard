@@ -146,6 +146,46 @@ export interface OverlaySource {
 }
 
 /**
+ * 在一個 transaction 裡跑多個查詢。
+ *
+ * ─────────────────────────────────────────────────────────
+ * ⚠️ 為什麼不能用「一條 SQL 放多個陳述句」
+ * ─────────────────────────────────────────────────────────
+ *
+ * 我第一版把 createUserWithDefaults 寫成一條 SQL 裡塞 6 個 INSERT
+ * （用分號分隔），理由是「11 次跨網路往返降到 1 次」。
+ *
+ * 而 Neon 的 HTTP driver 直接拒絕：
+ *
+ *     cannot insert multiple commands into a prepared statement
+ *
+ * 那是 Neon 的 prepared statement 協議限制 —— extended query protocol
+ * 一條只帶一個 command。
+ *
+ * ⚠️ 而 tsc 過、build 過、deploy 過。
+ *    只有**真的對 Neon 執行**才會發現 —— 那正是這支測試存在的理由。
+ *
+ * ── transaction 是正確的替代 ──────────────────────────────
+ *
+ * Neon 的 transaction() 接受查詢陣列，用單次擴展協議批次送出全部 ——
+ * 所以網路往返仍是 1 次（而非 11 次），而且具備全部-or-nothing 語意。
+ *
+ * 而 all-or-nothing 在這裡是**必需的**而非錦上添花：
+ * 建立使用者時若 OBS source 只插了 3 個，
+ * 那個帳號的 overlay 就是半壞的，而沒有人會去查。
+ */
+export async function transaction(
+  queries: Array<[string, unknown[]?]>,
+): Promise<unknown[]> {
+  const sql = client();
+  return sql.transaction(
+    queries.map(([text, params]) =>
+      params && params.length ? sql.query(text, params as never[]) : sql.query(text),
+    ),
+  );
+}
+
+/**
  * 取一個 OBS 來源 + 功能設定（overlay-render.ts 的 resolveOverlay 相容層）。
  *
  * ─────────────────────────────────────────────────────────

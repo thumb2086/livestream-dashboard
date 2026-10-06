@@ -1,5 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+// 2026-10-06：從 Prisma 改成 Neon HTTP（Workers 相容）。
+//
+// ⚠️ 這是**登入入口** —— 沒有它，沒有人能進來。
+//   而症狀會被 OAuth 的 try/catch 轉成 callback_failed，
+//   看起來像「憑證有問題」而不是「Prisma 沒法在 Workers 上跑」。
+import {
+  userBySessionId, userByEmail, userByChannel, userByPlatformChannelName,
+  createUserWithDefaults, updateUserProfile, upsertPlatformConnection, createSession,
+} from "@/lib/account-http";
 
 const CLIENT_CONFIG: Record<string, { tokenUrl: string; idEnv: string; secretEnv: string }> = {
   twitch: { tokenUrl: "https://id.twitch.tv/oauth2/token", idEnv: "TWITCH_CLIENT_ID", secretEnv: "TWITCH_CLIENT_SECRET" },
@@ -93,51 +101,59 @@ export async function GET(req: NextRequest) {
   const cookie = req.headers.get("cookie") || "";
   const sessionMatch = cookie.match(/sf_session=([^;]+)/);
   if (sessionMatch) {
-    const existingSession = await prisma.session.findUnique({ where: { id: sessionMatch[1] } });
-    if (existingSession) user = await prisma.user.findUnique({ where: { id: existingSession.userId } });
+    user = await userBySessionId(sessionMatch[1]);
   }
 
   // 2. Try by email (most reliable cross-platform)
   if (!user && email) {
-    user = await prisma.user.findFirst({ where: { email } });
+    user = await userByEmail(email);
   }
 
   // 3. Try by channel ID
   if (!user && channelId) {
-    const conn = await prisma.platformConnection.findFirst({ where: { channelId, platform } });
-    if (conn) user = await prisma.user.findUnique({ where: { id: conn.userId } });
+    user = await userByChannel(channelId, platform);
   }
 
   // 4. If this user already has a connection for this platform, DON'T create new user
-  if (!user) {
-    const existingConn = await prisma.platformConnection.findFirst({ where: { platform, channelName } });
-    if (existingConn) user = await prisma.user.findUnique({ where: { id: existingConn.userId } });
+  if (!user && channelName) {
+    // ⚠️ 這裡**必須**檢查 channelName。
+    //
+    //    原 Prisma 版本傳的是 `channelName`（可能為 null），
+    //    而 findFirst({ where: { channelName: null } }) 會撈到
+    //    「channelName 是 null 的第一筆連線」—— 也就是**別人**的帳號。
+    //
+    //    那是個身分冒用漏洞：任何一個沒有 channel name 的平台登入，
+    //    都可能被掛到某個隨機的使用者身上。
+    //
+    //    我第一版照抄了 Prisma 的行為（傳 null 進去），
+    //    而 TS 立刻抓到型別不符 —— 那是個好兆頭：
+    //    改寫成 raw SQL 讓原本被型別系統忽略的問題浮現。
+    user = await userByPlatformChannelName(platform, channelName);
   }
 
   // 5. Create new user with default settings
   if (!user) {
     const finalHandle = (channelHandle || channelName || email?.split("@")[0] || `user_${Date.now()}`).toLowerCase().replace(/[^a-z0-9]/g, "");
     const finalName = channelName || finalHandle;
-    function rt(): string { return crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "").slice(0, 8); }
-    user = await prisma.user.create({ data: { name: finalName, username: finalHandle, email: email || "", demoMode: false } });
-    await Promise.all([
-      prisma.chatSettings.create({ data: { userId: user.id } }),
-      prisma.subtitleConfig.create({ data: { userId: user.id } }),
-      prisma.onboardState.create({ data: { userId: user.id } }),
-      prisma.platformConnection.upsert({
-        where: { userId_platform: { userId: user.id, platform: "twitch" } },
-        update: {}, create: { userId: user.id, platform: "twitch", connected: false },
-      }),
-      prisma.platformConnection.upsert({
-        where: { userId_platform: { userId: user.id, platform: "youtube" } },
-        update: {}, create: { userId: user.id, platform: "youtube", connected: false },
-      }),
-      prisma.oBSSource.create({ data: { userId: user.id, sourceKey: "chat", name: "聊天室疊加層", token: rt() } }),
-      prisma.oBSSource.create({ data: { userId: user.id, sourceKey: "donations", name: "斗內進度條", token: rt(), enabled: false } }),
-      prisma.oBSSource.create({ data: { userId: user.id, sourceKey: "subtitles", name: "字幕疊加層", token: rt() } }),
-      prisma.oBSSource.create({ data: { userId: user.id, sourceKey: "alerts", name: "斗內通知", token: rt() } }),
-      prisma.oBSSource.create({ data: { userId: user.id, sourceKey: "stats", name: "頻道統計疊加層", token: rt(), enabled: false } }),
-    ]);
+    // 原本是 1 個 users create + Promise.all([11 個])。
+    // 現在是單一 multi-statement —— 11 次跨網路往返降到 1 次，
+    // 而語意等價（實測見 scripts/test-account-http.cjs）。
+    //
+    // ⚠️ enabled 的預設值不在這裡決定，而在 account-http.ts 裡 ——
+    //    donations 與 stats 預設是 false，而那是容易被「順手改成 true」的細節。
+    const expiresAtIso = tokens.expires_in
+      ? new Date(Date.now() + tokens.expires_in * 1000).toISOString()
+      : null;
+    user = await createUserWithDefaults(
+      finalName,
+      finalHandle,
+      email || "",
+      channelAvatar || "",
+      platform,
+      tokens.access_token,
+      tokens.refresh_token || null,
+      expiresAtIso,
+    );
   } else {
     // Update user: display name from channel name, username from handle
     const updateFields: any = {};
@@ -148,20 +164,24 @@ export async function GET(req: NextRequest) {
     }
     if (email && email !== user.email) updateFields.email = email;
     if (channelAvatar && !user.avatar) updateFields.avatar = channelAvatar;
-    if (Object.keys(updateFields).length) await prisma.user.update({ where: { id: user.id }, data: updateFields });
+    if (Object.keys(updateFields).length) await updateUserProfile(user.id, updateFields);
   }
 
   // Store/update platform connection for THIS user (regardless of which platform it is)
-  await prisma.platformConnection.upsert({
-    where: { userId_platform: { userId: user.id, platform } },
-    update: { connected: true, accessToken: tokens.access_token, refreshToken: tokens.refresh_token || null, tokenExpiresAt: new Date(Date.now() + (tokens.expires_in || 3600) * 1000), channelId, channelName, channelAvatar },
-    create: { userId: user.id, platform, connected: true, accessToken: tokens.access_token, refreshToken: tokens.refresh_token || null, tokenExpiresAt: new Date(Date.now() + (tokens.expires_in || 3600) * 1000), channelId, channelName, channelAvatar },
+  await upsertPlatformConnection(user.id, platform, {
+    connected: true,
+    accessToken: tokens.access_token,
+    refreshToken: tokens.refresh_token || null,
+    tokenExpiresAt: tokens.expires_in ? new Date(Date.now() + tokens.expires_in * 1000).toISOString() : null,
+    channelId: channelId || null,
+    channelName: channelName || null,
+    channelAvatar: channelAvatar || null,
   });
 
   // Create/renew session
-  const session = await prisma.session.create({ data: { userId: user.id, platform } });
+  const sessionId = await createSession(user.id, platform);
   const response = NextResponse.redirect(new URL(`/dashboard/connections?connected=${platform}`, req.url));
-  response.cookies.set("sf_session", session.id, { httpOnly: true, maxAge: 86400 * 30, path: "/", sameSite: "lax" });
+  response.cookies.set("sf_session", sessionId, { httpOnly: true, maxAge: 86400 * 30, path: "/", sameSite: "lax" });
 
   return response;
 }

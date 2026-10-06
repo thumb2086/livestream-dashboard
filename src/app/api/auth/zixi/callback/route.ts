@@ -1,6 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+// 2026-10-06：從 Prisma 改成 Neon HTTP（Workers 相容）。
+//
+// ⚠️ 這條路由是**跨專案 ZXC 付款的 OAuth 入口** ——
+//    zixi-earth 是 provider，這裡是 client 的 callback。
+//    所以在 Workers 上它壞掉 = 付款的 OAuth 鏈路斷在最後一步。
+//
+//    而症狀會是：使用者按下「連結 ZIXI」→ 被導回
+//    /dashboard/zixi?error=callback_failed，而錯誤是 WASM 訊息。
 import { getSessionId } from "@/lib/getUser";
+import { getSessionUserId, saveZixiToken } from "@/lib/auth-http";
 import { zixiApiBase } from "@/lib/zixi-endpoints";
 
 // 2026-10-06：原本是 `|| "https://zixi-casino-api.onrender.com/api/v1"`。
@@ -31,8 +39,8 @@ export async function GET(req: NextRequest) {
     return NextResponse.redirect(new URL("/dashboard/zixi?error=not_logged_in", req.url));
   }
 
-  const session = await prisma.session.findUnique({ where: { id: sessionId } });
-  if (!session) {
+  const userId = await getSessionUserId(sessionId);
+  if (!userId) {
     return NextResponse.redirect(new URL("/dashboard/zixi?error=session_not_found", req.url));
   }
 
@@ -59,13 +67,14 @@ export async function GET(req: NextRequest) {
       return NextResponse.redirect(new URL("/dashboard/zixi?error=token_exchange_failed", req.url));
     }
 
-    await prisma.user.update({
-      where: { id: session.userId },
-      data: {
-        zixiAccessToken: tokenData.access_token,
-        zixiTokenExpiresAt: new Date(Date.now() + (tokenData.expires_in || 365 * 24 * 3600) * 1000),
-      },
-    });
+    // ⚠️ expiresAt 傳 ISO 字串，不是 Date 物件。
+//    Prisma 傳 Date、HTTP 查詢傳字串，而 Neon 的 timestamptz 接受 ISO 8601。
+//    這裡明確用 toISOString() 讓型別與儲存格式一致 ——
+//    若把 Date 物件直接 bind 進去，driver 收到的是非字串，行為不確定。
+const expiresAtIso = new Date(
+      Date.now() + (tokenData.expires_in || 365 * 24 * 3600) * 1000,
+    ).toISOString();
+    await saveZixiToken(userId, tokenData.access_token, expiresAtIso);
 
     return NextResponse.redirect(new URL("/dashboard/zixi?success=connected", req.url));
   } catch (e) {
