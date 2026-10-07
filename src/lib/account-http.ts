@@ -173,11 +173,11 @@ export async function createUserWithDefaults(
 /** 更新使用者的顯示欄位。 */
 export async function updateUserProfile(
   id: string,
-  fields: { name?: string; username?: string; email?: string; avatar?: string },
+  fields: { name?: string; username?: string; email?: string; avatar?: string; followers?: number },
 ): Promise<void> {
   const sets: string[] = [];
   const params: unknown[] = [id];
-  for (const k of ['name', 'username', 'email', 'avatar'] as const) {
+  for (const k of ['name', 'username', 'email', 'avatar', 'followers'] as const) {
     if (fields[k] !== undefined) {
       params.push(fields[k]);
       sets.push(`"${k}" = $${params.length}`);

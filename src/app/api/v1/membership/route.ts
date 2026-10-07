@@ -8,6 +8,7 @@ import {
 import { getOrCreateUser, getSessionId, unauthorized } from "@/lib/getUser";
 import { PLANS, QUOTAS, effectivePlan } from "@/lib/plans";
 import { invalidateQuota } from "@/lib/usage";
+import { getZixiUserId, chargeZixi, confirmZixiCharge } from "@/lib/zixi-payments";
 
 const str = (v: unknown, max: number) => (typeof v === "string" ? v.trim().slice(0, max) : "");
 
@@ -91,30 +92,71 @@ export async function POST(req: Request) {
       if (!plan) return NextResponse.json({ error: "unknown plan" }, { status: 400 });
       const billingMode = body.billingMode === "yearly" ? "yearly" : "monthly";
 
-      // Paid plans go to `pending` — real ECPay recurring checkout is not wired yet,
-      // so we never silently mark someone as paid.
-      const status = planKey === "free" ? "active" : "pending";
+      // 2026-10-07：正式接上 ZXC 扣款。
+      // 以前是「先設 pending + 建 invoice」而沒有任何收款，
+      // 使用者按升級就變成 pending、錢從不進來。
+      const amount = billingMode === "yearly" ? plan.yearly : plan.monthly;
 
-      const periodEnd = new Date();
-      if (billingMode === "yearly") periodEnd.setFullYear(periodEnd.getFullYear() + 1);
-      else periodEnd.setMonth(periodEnd.getMonth() + 1);
+      if (planKey === "free") {
+        await upsertSubscription(user.id, {
+          planKey: "free",
+          billingMode: "monthly",
+          status: "active",
+          currentPeriodEnd: null,
+        });
+        invalidateQuota(user.id);
+      } else {
+        if (!user.zixiAccessToken) {
+          return NextResponse.json(
+            { error: "請先連結 ZIXI 帳號，才能用子熙幣購買方案" },
+            { status: 400 }
+          );
+        }
+        const zixiUserId = await getZixiUserId(user.zixiAccessToken);
+        if (!zixiUserId) {
+          return NextResponse.json(
+            { error: "ZIXI 授權已失效，請重新連結 ZIXI 帳號" },
+            { status: 401 }
+          );
+        }
 
-      await upsertSubscription(user.id, {
-        planKey,
-        billingMode,
-        status,
-        currentPeriodEnd: planKey === "free" ? null : periodEnd.toISOString(),
-      });
-      invalidateQuota(user.id);
-
-      if (planKey !== "free" && status === "pending") {
         const n = Date.now().toString(36).toUpperCase();
+        const idempotencyKey = `SF-${new Date().getFullYear()}-${n}`;
+        const charge = await chargeZixi({
+          zixiUserId,
+          amount,
+          idempotencyKey,
+          meta: { planKey, billingMode, userId: user.id },
+        });
+        if (!charge.ok) {
+          return NextResponse.json(
+            { error: charge.error || "ZXC 扣款失敗" },
+            { status: 402 }
+          );
+        }
+
+        // 扣款成功且方案已準備好 → 才開通。confirm 失敗不阻止開通，
+        // 因 zixi-earth 的 reconcile 會補上 settled 狀態。
+        await confirmZixiCharge(idempotencyKey, `livestream-dashboard ${planKey}`).catch(() => {});
+
+        const periodEnd = new Date();
+        if (billingMode === "yearly") periodEnd.setFullYear(periodEnd.getFullYear() + 1);
+        else periodEnd.setMonth(periodEnd.getMonth() + 1);
+
+        await upsertSubscription(user.id, {
+          planKey,
+          billingMode,
+          status: "active",
+          currentPeriodEnd: periodEnd.toISOString(),
+        });
+        invalidateQuota(user.id);
+
         await createInvoice({
           userId: user.id,
-          number: `SF-${new Date().getFullYear()}-${n}`,
-          amount: billingMode === "yearly" ? plan.yearly : plan.monthly,
-          tax: Math.round((billingMode === "yearly" ? plan.yearly : plan.monthly) * 0.05),
-          status: "pending",
+          number: idempotencyKey,
+          amount,
+          tax: Math.round(amount * 0.05),
+          status: "paid",
           period: new Date().toISOString().slice(0, 7),
         });
       }

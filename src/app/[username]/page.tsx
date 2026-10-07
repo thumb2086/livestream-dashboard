@@ -1,4 +1,4 @@
-import { prisma } from "@/lib/prisma";
+import { query, queryOne } from "@/lib/db-http";
 import { notFound } from "next/navigation";
 import { Heart } from "lucide-react";
 
@@ -8,14 +8,17 @@ export default async function PublicCreatorPage({ params }: { params: Promise<{ 
   const { username } = await params;
   const decoded = decodeURIComponent(username);
   const cleanName = decoded.startsWith("@") ? decoded.slice(1) : decoded;
-  const user = await prisma.user.findUnique({ where: { username: cleanName } });
+  const user = await queryOne<{ id: string; username: string; name: string; avatar: string; publicPage: boolean }>(
+    'SELECT "id", "username", "name", "avatar", "publicPage" FROM "User" WHERE "username" = $1 LIMIT 1',
+    [cleanName],
+  );
 
   if (!user || !user.publicPage) return notFound();
 
-  const goals = await prisma.donationGoal.findMany({
-    where: { userId: user.id },
-    orderBy: { sortOrder: "asc" },
-  });
+  const goals = await query<{ id: string; emoji: string; title: string; current: number; goal: number }>(
+    'SELECT "id", "emoji", "title", "current", "goal" FROM "DonationGoal" WHERE "userId" = $1 ORDER BY "sortOrder" ASC',
+    [user.id],
+  );
   const totalDonations = goals.reduce((sum: number, g: { current: number }) => sum + g.current, 0);
   const totalGoal = goals.reduce((sum: number, g: { goal: number }) => sum + g.goal, 0);
 

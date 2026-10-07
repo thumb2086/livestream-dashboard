@@ -24,6 +24,7 @@
 // ⚠️ 而且這裡原本用的是 **`await import("./prisma")` 動態載入**，
 //    所以我的掃描器（只認靜態 `prisma.x.y`）一個字都抓不到。
 //    那是比 `as any` 更隱蔽的盲點 —— 掃描器的 pattern 決定了它看不見什麼。
+//    2026-10-07：`src/lib/prisma.ts` 已刪除，這條動態路徑已不存在。
 //
 // 外部 API（Twitch/YouTube）不動：那是單純的 fetch，Workers 原生支援。
 // 擋路的只有 Prisma。

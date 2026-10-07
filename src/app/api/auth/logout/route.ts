@@ -1,12 +1,12 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { query } from "@/lib/db-http";
 
 export async function POST(req: Request) {
   try {
     const cookie = req.headers.get("cookie") || "";
     const match = cookie.match(/sf_session=([^;]+)/);
     if (match?.[1]) {
-      await prisma.session.delete({ where: { id: match[1] } }).catch(() => {});
+      await query('DELETE FROM "Session" WHERE "id" = $1', [match[1]]).catch(() => {});
     }
   } catch { /* best effort */ }
   const response = NextResponse.json({ ok: true });

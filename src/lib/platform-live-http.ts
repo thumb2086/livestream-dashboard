@@ -175,11 +175,13 @@ export async function saveChannelInfo(
     channelId?: string | null;
     channelName?: string | null;
     channelAvatar?: string | null;
+    accessToken?: string | null;
+    tokenExpiresAt?: string | null;
   },
 ): Promise<void> {
   const sets: string[] = [];
   const params: unknown[] = [id];
-  for (const k of ['channelId', 'channelName', 'channelAvatar'] as const) {
+  for (const k of ['channelId', 'channelName', 'channelAvatar', 'accessToken', 'tokenExpiresAt'] as const) {
     if (info[k] !== undefined) {
       params.push(info[k]);
       sets.push(`"${k}" = $${params.length}`);

@@ -1,4 +1,4 @@
-import { prisma } from "@/lib/prisma";
+import { query, queryOne } from "@/lib/db-http";
 import { notFound } from "next/navigation";
 import DonateForm from "./DonateForm";
 
@@ -8,22 +8,24 @@ export default async function PublicDonatePage({ params }: { params: Promise<{ u
   const { username } = await params;
   const decoded = decodeURIComponent(username);
   const cleanName = decoded.startsWith("@") ? decoded.slice(1) : decoded;
-  const user = await prisma.user.findUnique({ where: { username: cleanName } });
+  const user = await queryOne<{ id: string; username: string; name: string; avatar: string; publicPage: boolean; zixiWallet: string }>(
+    'SELECT "id", "username", "name", "avatar", "publicPage", "zixiWallet" FROM "User" WHERE "username" = $1 LIMIT 1',
+    [cleanName],
+  );
   if (!user || !user.publicPage) return notFound();
 
-  const goals = await prisma.donationGoal.findMany({
-    where: { userId: user.id },
-    orderBy: { sortOrder: "asc" },
-  });
+  const goals = await query<{ id: string; title: string; current: number; goal: number }>(
+    'SELECT "id", "title", "current", "goal" FROM "DonationGoal" WHERE "userId" = $1 ORDER BY "sortOrder" ASC',
+    [user.id],
+  );
   const totalReceived = goals.reduce((s: number, g: { current: number }) => s + g.current, 0);
   const hasZixi = user.zixiWallet && user.zixiWallet.startsWith("0x");
   const zixiWallet = user.zixiWallet || "";
 
-  const recentDonations = await prisma.zixiDonation.findMany({
-    where: { userId: user.id, status: "confirmed" },
-    orderBy: { createdAt: "desc" },
-    take: 10,
-  });
+  const recentDonations = await query<{ donorName: string; donorAddress: string; amount: number; token: string; message: string }>(
+    'SELECT "donorName", "donorAddress", "amount", "token", "message" FROM "ZixiDonation" WHERE "userId" = $1 AND "status" = \'confirmed\' ORDER BY "createdAt" DESC LIMIT 10',
+    [user.id],
+  );
 
   const recentJson = JSON.stringify(recentDonations.map(d => ({
     name: d.donorName || d.donorAddress?.slice(0,6)+"..."+d.donorAddress?.slice(-4) || "匿名",
